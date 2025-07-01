@@ -1,0 +1,45 @@
+providers:
+  ollama:
+    name: "Ollama"
+    base_url: "http://localhost:11434/v1"
+    base_url_vision: "http://localhost:11434/v1/chat/completions"
+    rerank_url: null
+    api_env_var: "OLLAMA_API_KEY"
+    fall_back_provider: "ollama"
+    supports_embedding: true
+    supports_reranker: false
+    models:
+      default_embedding: "bge-m3"
+      default_reranker: null
+      default_llm: "deepseek-r1:14b" # change accordingly for smaller models
+      default_vision: "llama3.2-vision" # same here
+    
+  eosc:
+    name: "AI4EOSC"
+    base_url: "https://llm.dev.ai4eosc.eu:8000/v1"
+    base_url_vision: "https://llm.dev.ai4eosc.eu:8000/v1/chat/completions"
+    rerank_url: null
+    api_env_var: "API_KEY_EOSC_KEYCLOACK"
+    fall_back_provider: "ollama"
+    supports_embedding: false
+    supports_reranker: false
+    models:
+      default_embedding: null
+      default_reranker: null
+      default_llm: "AI4EOSC/Qwen3"
+      default_vision: "AI4EOSC/Small"
+  
+  # new_provider:
+  #   name: "Example Provider"
+  #   base_url: "https://api.exampleprovider.com/v1"
+  #   base_url_vision: "https://api.exampleprovider.com/v1/chat/completions"
+  #   rerank_url: "https://api.exampleprovider.com/v1/rerank"
+  #   api_env_var: "API_KEY_EXAMPLE_PROVIDER"
+  #   fall_back_provider: "ollama"
+  #   supports_embedding: true
+  #   supports_reranker: true
+  #   models:
+  #     default_embedding: "example-embedding-model"
+  #     default_reranker: "example-reranker-model"
+  #     default_llm: "example-llm-model"
+  #     default_vision: "example-vision-model"

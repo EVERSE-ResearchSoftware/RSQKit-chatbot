@@ -1,0 +1,4 @@
+# directories.yaml
+directories:
+  documents_dir: "static/documents"
+  chroma_persist_dir: "chromadb_store"

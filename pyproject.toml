@@ -1,0 +1,51 @@
+[project]
+name = "rsqkit-chatbot"
+version = "0.1.0"
+description = "A RAG chatbot connected to the RSQKit"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "beautifulsoup4>=4.13.4",
+    "bm25s>=0.2.13",
+    "chromadb>=1.0.8",
+    "docx2txt>=0.9",
+    "fpdf>=1.7.2",
+    "html5lib>=1.1",
+    "imapclient>=3.0.1",
+    "lxml>=5.4.0",
+    "markdown>=3.8",
+    "nbformat>=5.10.4",
+    "ollama>=0.4.8",
+    "openai>=1.0.0",
+    "openpyxl>=3.1.5",
+    "pillow>=11.2.1",
+    "pylatexenc>=2.10",
+    "pymupdf>=1.25.5",
+    "python-docx>=1.1.2",
+    "python-dotenv>=1.1.0",
+    "python-pptx>=1.0.2",
+    "requests>=2.32.3",
+    "scikit-learn>=1.7.0",
+    "sentence-transformers>=4.1.0",
+    "streamlit>=1.45.0",
+    "watchdog>=6.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "bandit>=1.8.5",
+    "black[jupyter]>=25.1.0",
+    "ipykernel>=6.29.5",
+    "ipywidgets>=8.1.7",
+    "openai>=1.0.0",
+    "pdf2image>=1.17.0",
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-html>=3.1.0",
+    "pytest-mock>=3.8.0",
+    "pytest-xdist>=3.0.0",
+    "tqdm>=4.67.1",
+]
+
+[tool.pyright]
+typeCheckingMode = "off"
