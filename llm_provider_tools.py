@@ -1,5 +1,10 @@
 from vision.ocr_by_provider import analyse_image_provider as provider_ocr
-from settings import RESOURCES, PROVIDER_TO_RESOURCE_KEY, PROVIDER_ID_TO_NAME
+from settings import (
+    RESOURCES,
+    PROVIDER_TO_RESOURCE_KEY,
+    PROVIDER_ID_TO_NAME,
+    ConfigKeys,
+)
 from openai import OpenAI
 from typing import List, Union, Optional, Dict
 import requests
@@ -46,12 +51,6 @@ def _get_provider_config(provider: str) -> dict:
         raise LLMClientError(f"Configuration missing for provider: {provider}")
 
     config = RESOURCES[resource_key]
-    required_keys = ["base_url", "default_embedding"]
-
-    for key in required_keys:
-        if key not in config:
-            raise LLMClientError(f"Missing '{key}' in {provider} configuration")
-
     return config
 
 
@@ -60,12 +59,14 @@ def _create_client(provider: str) -> OpenAI:
     config = _get_provider_config(provider)
     resource_key = _get_resource_key(provider)
 
-    api_key = os.environ.get(config["api_env_var"], "required-but-needed-for-ollama")
+    api_key = os.environ.get(
+        config[ConfigKeys.API_ENV_VAR], "required-but-needed-for-ollama"
+    )
 
     if not api_key and resource_key != "ollama":
         raise LLMClientError(f"API_KEY environment variable required for {provider}")
 
-    return OpenAI(base_url=config["base_url"], api_key=api_key)
+    return OpenAI(base_url=config[ConfigKeys.BASE_URL], api_key=api_key)
 
 
 def get_embedding(
@@ -90,14 +91,16 @@ def get_embedding(
 
         # Fetch provider configuration
         config = _get_provider_config(provider)
-        model = model_name or config.get("default_embedding")
+        model = model_name or config.get(ConfigKeys.DEFAULT_EMBEDDING)
 
         # Check if the provider supports embedding
-        supports_embedding = config["supports_embedding"]
+        supports_embedding = config.get(ConfigKeys.SUPPORTS_EMBEDDING, False)
         # Fallback to referenced fall_back_provider if the provider doesn't support embedding
         if not supports_embedding:
             # get embedding from fallback_provider
-            fall_back_provider = config["fall_back_provider"]
+            fall_back_provider = PROVIDER_ID_TO_NAME.get(
+                config.get(ConfigKeys.FALL_BACK_PROVIDER, "")
+            )
             return get_embedding(
                 input=input, provider=fall_back_provider, model_name=model
             )
@@ -134,7 +137,7 @@ def rerank_docs(
 ) -> Dict:
 
     config = _get_provider_config(provider)
-    supports_reranker = config["supports_reranker"]
+    supports_reranker = config.get(ConfigKeys.SUPPORTS_RERANKER, False)
     if not supports_reranker:  # No reranker available
         reranked_docs_data = {
             "indices": [_ for _ in range(len(input))],  # same order as the input
@@ -142,16 +145,15 @@ def rerank_docs(
         }
         return reranked_docs_data
 
-    required_keys = ["rerank_url", "default_reranker"]
-
+    required_keys = [ConfigKeys.RERANK_URL, ConfigKeys.DEFAULT_RERANKER]
     for key in required_keys:
         if key not in config:
             raise LLMClientError(f"Missing '{key}' in {provider} configuration")
     api_key = os.environ.get(
-        config["api_env_var"], "required-but-not-needed-for-ollama"
+        config.get(ConfigKeys.API_ENV_VAR), "required-but-not-needed-for-ollama"
     )
-    model = model_name or config.get("default_reranker")
-    url = config.get("rerank_url")
+    model = model_name or config.get(ConfigKeys.DEFAULT_RERANKER)
+    url = config.get(ConfigKeys.RERANK_URL)
     headers = {"authorization": f"Bearer {api_key}", "content-type": "application/json"}
     data = {"prompt": prompt, "input": input, "model": model}
     if url is not None:
@@ -211,9 +213,11 @@ def get_default_llm(selected_provider: str) -> str:
     if not resource:
         raise KeyError(f"No resource found for key: '{resource_key}'")
 
-    llm_model = resource.get("default_llm")
+    llm_model = resource.get(ConfigKeys.DEFAULT_LLM)
     if not llm_model:
-        raise KeyError(f"'default_llm' not defined for provider '{resource_key}'")
+        raise KeyError(
+            f"""'{ConfigKeys.DEFAULT_LLM}' not defined for provider '{resource_key}'"""
+        )
 
     return llm_model
 
@@ -229,9 +233,11 @@ def get_default_vison_model(selected_provider: str) -> str:
     if not resource:
         raise KeyError(f"No resource found for key: '{resource_key}'")
 
-    vision_model = resource.get("default_vision")
+    vision_model = resource.get(ConfigKeys.DEFAULT_VISION)
     if not vision_model:
-        raise KeyError(f"'default_llm' not defined for provider '{resource_key}'")
+        raise KeyError(
+            f"""'{ConfigKeys.DEFAULT_VISION}' not defined for provider '{resource_key}'"""
+        )
 
     return vision_model
 
