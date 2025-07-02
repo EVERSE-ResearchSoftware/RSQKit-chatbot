@@ -30,9 +30,8 @@ Before you begin, please make sure you’ve installed all of the following. Olla
 
 - **Python 3.10 or higher**
 
-- **Ollama** (used for running models locally)  
-  To install Ollama, follow the official instructions here: [https://ollama.com](https://ollama.com)  
-  After installation, confirm it's working by running:
+- **Ollama**  
+After installation, confirm it's working by running:
   ```bash
     ollama --help
   ```
@@ -102,7 +101,7 @@ To integrate an AI provider, update the `provider_config.yaml` file with the pro
    With the virtual environment activated, install the required packages:
 
    ```bash
-   pip install -r requirements.txt
+   pip install -e .
    ```
 
 4. **⚠️ Configure environment variables**
@@ -146,8 +145,6 @@ rsqkit-chatbot/
 ├── pyproject.toml
 ├── pytest.ini
 ├── README.md
-├── requirements-test.txt
-├── requirements.txt
 ├── rsqkit_scrap.py
 ├── rsqkit_markdown                     # Contains markdown input files (not tracked)
 ├── run_app.sh
