@@ -1,5 +1,5 @@
 [project]
-name = "rsqkit-chatbot"
+name = "RSQKit-chatbot"
 version = "0.1.0"
 description = "A RAG chatbot connected to the RSQKit"
 readme = "README.md"
@@ -39,13 +39,23 @@ dev = [
     "ipywidgets>=8.1.7",
     "openai>=1.0.0",
     "pdf2image>=1.17.0",
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-    "pytest-html>=3.1.0",
-    "pytest-mock>=3.8.0",
-    "pytest-xdist>=3.0.0",
     "tqdm>=4.67.1",
 ]
+test = [
+    "pytest>=8.4.1",
+    "pytest-cov>=6.2.1",
+    "pytest-html>=4.1.1",
+    "pytest-mock>=3.14.1",
+    "pytest-xdist>=3.8.0",
+]
+
 
 [tool.pyright]
 typeCheckingMode = "off"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["ui", "llms", "vision", "core_utils", "task_modules", "prompt_templates"]

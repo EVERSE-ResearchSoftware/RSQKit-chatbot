@@ -165,7 +165,7 @@ def render_provider_selection(page_key: str):
         if "provider" not in st.session_state:
             st.session_state[f"provider_{page_key}"] = provider
         if not check_api_key(provider=provider):
-            st.error(f"Missing API_KEY for {provider}")
+            st.error(f"Missing API key for {provider}")
 
 
 def render_navigation_links():
