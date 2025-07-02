@@ -1,9 +1,9 @@
 import streamlit as st
-from ui.header import sidebar_items, ICONS
+from ui.header import display_navigation_links, ICONS
 
 st.set_page_config(page_title="Generative AI Services", page_icon="", layout="wide")
 
-sidebar_items()
+display_navigation_links()
 
 # Custom CSS for beautiful card design
 st.markdown(

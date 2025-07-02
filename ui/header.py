@@ -1,9 +1,8 @@
 import streamlit as st
 from settings import COLLECTIONS_SESSION, PROVIDER_ID_TO_NAME
+from core_utils.health_api import check_api_key
 
 # Configuration des icônes modernes et professionnelles
-
-
 SIDEBAR_STYLE = """
 <style>
 .nav-item {
@@ -65,6 +64,8 @@ SIDEBAR_STYLE = """
 }
 </style>
 """
+
+# Define icons
 ICONS = {
     "home": "🏡",
     "chat": "💬",
@@ -79,87 +80,108 @@ ICONS = {
     "local": "💻",
     "tasks": "🔀",
     "eosc": "🚀",
+    "email": "📬",
 }
 
+# Centralized page configuration
+pages_config = [
+    {"key": "home", "title": "Home", "page": "app.py", "icon_key": "home"},
+    {
+        "key": "general_chat",
+        "title": "Chat",
+        "page": "pages/general_purpose_chat.py",
+        "icon_key": "chat",
+    },
+    {
+        "key": "rsqkit_chat",
+        "title": "RSQKit Chat",
+        "page": "pages/rsqkit_rag_chat.py",
+        "icon_key": "rsqkit_chat",
+    },
+    {
+        "key": "document_chat",
+        "title": "Document Chat",
+        "page": "pages/document_chat.py",
+        "icon_key": "document_chat",
+    },
+    {
+        "key": "collections",
+        "title": "Collections",
+        "page": "pages/collections.py",
+        "icon_key": "collections",
+    },
+    {
+        "key": "rag_collections",
+        "title": "RAG on a collection",
+        "page": "pages/rag_on_collection.py",
+        "icon_key": "rag_collections",
+    },
+    {"key": "tasks", "title": "Tasks", "page": "pages/tasks.py", "icon_key": "tasks"},
+]
+
+
+# Generate the pages dictionary from the configuration
 pages = {
-    "home": st.Page("app.py", title="Home"),
-    "rsqkit_chat": st.Page("pages/rsqkit_rag_chat.py", title="RSQKit Chat"),
-    "general_chat": st.Page("pages/general_purpose_chat.py", title="Chat"),
-    "document_chat": st.Page("pages/document_chat.py", title="Document Chat"),
-    "collections": st.Page("pages/collections.py", title="Collections"),
-    "rag_collections": st.Page(
-        "pages/rag_on_collection.py", title="RAG on a collection"
-    ),
-    "tasks": st.Page("pages/tasks.py", title="Tasks"),
+    page["key"]: st.Page(page["page"], title=page["title"]) for page in pages_config
 }
 
 
-# Helper function to get the appropriate icon
-def get_icon(key):
-    return ICONS["local"] if key == "ollama" else ICONS["remote"]
+def display_navigation_links():
+    """Navigation sidebar sans provider selection"""
+    with st.sidebar:
+        # Injection du CSS
+        st.markdown(SIDEBAR_STYLE, unsafe_allow_html=True)
+        for page in pages_config:
+            icon = ICONS[page["icon_key"]]
+            st.page_link(pages[page["key"]], label=f"{icon} {page['title']}")
 
 
+# Helper function to get the appropriate icon for AI provider
+def get_icon(provider_key):
+    return ICONS["local"] if provider_key == "ollama" else ICONS["remote"]
+
+
+# Function to reset chat messages for a given page
 def reset_chat(page_key: str):
     """Reset chat messages for a given page"""
     st.session_state[page_key]["messages"] = []
 
 
-def create_nav_link(icon_key, label):
-    """Crée un lien de navigation stylisé"""
-    return f"""
-    <div class="nav-item">
-        <span class="nav-icon">{ICONS[icon_key]}</span>
-        <span>{label}</span>
-    </div>
-    """
-
-
-def sidebar_items():
-    """Navigation sidebar sans provider selection"""
-    with st.sidebar:
-        # Injection du CSS
-        st.markdown(SIDEBAR_STYLE, unsafe_allow_html=True)
-
-        # Navigation links avec style amélioré
-        st.page_link(pages["home"], label=f"{ICONS['home']} Home")
-        st.page_link(pages["general_chat"], label=f"{ICONS['chat']} Chat")
-        st.page_link(pages["rsqkit_chat"], label=f"{ICONS['rsqkit_chat']} RSQKit Chat")
-        st.page_link(
-            pages["document_chat"], label=f"{ICONS['document_chat']} Document Chat"
+# Function to render provider selection
+def render_provider_selection(page_key: str):
+    with st.expander(f"{ICONS['provider']} AI Provider", expanded=True):
+        provider_options = {
+            display_name: f"{get_icon(key)} {display_name}"
+            for key, display_name in PROVIDER_ID_TO_NAME.items()
+        }
+        provider = st.radio(
+            label="Provider",
+            options=list(provider_options.keys()),
+            format_func=lambda x: provider_options[x],
+            index=0,
+            label_visibility="hidden",
         )
-        st.page_link(
-            pages["rag_collections"],
-            label=f"{ICONS['rag_collections']} RAG on Collection",
-        )
-        st.page_link(pages["collections"], label=f"{ICONS['collections']} Collections")
-        st.page_link(pages["tasks"], label=f"{ICONS['tasks']} Tasks")
-
-        # Séparateur stylisé
-        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+        # Update session state
+        if "provider" not in st.session_state:
+            st.session_state[f"provider_{page_key}"] = provider
+        if not check_api_key(provider=provider):
+            st.error(f"Missing API_KEY for {provider}")
 
 
+def render_navigation_links():
+    for page in pages_config:
+        icon = ICONS[page["icon_key"]]
+        st.page_link(pages[page["key"]], label=f"{icon} {page['title']}")
+
+
+# Main sidebar rendering function
 def sidebar(page_key: str):
-    """Sidebar complète avec provider selection"""
+    display_navigation_links()
     with st.sidebar:
-        # Injection du CSS
-        st.markdown(SIDEBAR_STYLE, unsafe_allow_html=True)
-
-        # Navigation links
-        st.page_link(pages["home"], label=f"{ICONS['home']} Home")
-        st.page_link(pages["general_chat"], label=f"{ICONS['chat']} Chat")
-        st.page_link(pages["rsqkit_chat"], label=f"{ICONS['rsqkit_chat']} RSQKit Chat")
-        st.page_link(
-            pages["document_chat"], label=f"{ICONS['document_chat']} Document Chat"
-        )
-        st.page_link(
-            pages["rag_collections"],
-            label=f"{ICONS['rag_collections']} RAG on Collection",
-        )
-        st.page_link(pages["collections"], label=f"{ICONS['collections']} Collections")
-        st.page_link(pages["tasks"], label=f"{ICONS['tasks']} Tasks")
-        # Séparateur
+        # Divider
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-        # Bouton nouvelle discussion avec style amélioré
+
+        # New chat button
         if page_key != COLLECTIONS_SESSION:
             if st.button(
                 f"{ICONS['new_chat']} New Chat",
@@ -169,22 +191,5 @@ def sidebar(page_key: str):
                 reset_chat(page_key)
                 st.success("✅ New chat started!")
 
-        with st.expander(f"{ICONS['provider']} AI Provider", expanded=True):
-
-            # Generate formatted provider options
-            provider_options = {
-                display_name: f"{get_icon(key)} {display_name}"
-                for key, display_name in PROVIDER_ID_TO_NAME.items()
-            }
-
-            # Streamlit radio widget
-            provider = st.radio(
-                label="Provider",
-                options=list(provider_options.keys()),
-                format_func=lambda x: provider_options[x],
-                index=0,
-                label_visibility="hidden",
-            )
-        # Mise à jour du state
-        if "provider" not in st.session_state:
-            st.session_state[f"provider_{page_key}"] = provider
+        # Provider selection
+        render_provider_selection(page_key)

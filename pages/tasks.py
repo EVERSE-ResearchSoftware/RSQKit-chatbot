@@ -156,7 +156,6 @@ def render_page_header(selected_task):
 
     task_title = TASK_CONFIG[selected_task]["title"]
     st.markdown(f'<h1 class="main-title">{task_title}</h1>', unsafe_allow_html=True)
-    
 
 
 def main():
