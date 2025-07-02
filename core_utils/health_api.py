@@ -1,7 +1,13 @@
-from settings import RESOURCES, ConfigKeys, PROVIDER_TO_RESOURCE_KEY, PROVIDER_ID_TO_NAME
+from settings import (
+    RESOURCES,
+    ConfigKeys,
+    PROVIDER_TO_RESOURCE_KEY,
+    PROVIDER_ID_TO_NAME,
+)
 import os
 from dotenv import load_dotenv
-OLLAMA_DISPLAY_NAME = PROVIDER_ID_TO_NAME.get('ollama', "Ollama")
+
+OLLAMA_DISPLAY_NAME = PROVIDER_ID_TO_NAME.get("ollama", "Ollama")
 
 load_dotenv()
 
@@ -12,7 +18,7 @@ def check_api_key(provider: str):
     is_ollama = provider == OLLAMA_DISPLAY_NAME
     if is_ollama:
         return True
-    
+
     provider_id = PROVIDER_TO_RESOURCE_KEY.get(provider, "")
     provider_resource = RESOURCES.get(provider_id, {})
     is_api_key_present = (
