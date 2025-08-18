@@ -1,195 +1,244 @@
 import streamlit as st
-from settings import COLLECTIONS_SESSION, PROVIDER_ID_TO_NAME
-from core_utils.health_api import check_api_key
+from settings import (
+    COLLECTIONS_SESSION,
+    PROVIDER_ID_TO_NAME,
+    StatusAPI,
+)
 
-# Configuration des icônes modernes et professionnelles
-SIDEBAR_STYLE = """
-<style>
-.nav-item {
-    display: flex;
-    align-items: center;
-    padding: 8px 12px;
-    margin: 4px 0;
-    border-radius: 8px;
-    transition: all 0.2s ease;
-    text-decoration: none;
-    color: inherit;
-}
-
-.nav-item:hover {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    transform: translateX(4px);
-    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
-}
-
-.nav-icon {
-    font-size: 1.2em;
-    margin-right: 10px;
-    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1));
-}
-
-.provider-card {
-    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-    color: white;
-    padding: 12px;
-    border-radius: 10px;
-    margin: 8px 0;
-    text-align: center;
-    font-weight: 600;
-    box-shadow: 0 4px 15px rgba(240, 147, 251, 0.3);
-}
-
-.divider {
-    background: linear-gradient(90deg, transparent, #ddd, transparent);
-    height: 1px;
-    margin: 15px 0;
-}
-
-.new-chat-btn {
-    background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
-    color: white;
-    border: none;
-    padding: 10px 20px;
-    border-radius: 25px;
-    font-weight: 600;
-    transition: all 0.3s ease;
-    cursor: pointer;
-    width: 100%;
-    box-shadow: 0 4px 15px rgba(67, 233, 123, 0.3);
-}
-
-.new-chat-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(67, 233, 123, 0.4);
-}
-</style>
-"""
-
-# Define icons
-ICONS = {
-    "home": "🏡",
-    "chat": "💬",
-    "rsqkit_chat": "📖",
-    "document_chat": "📋",
-    "collections": "🗂",
-    "rag_collections": "📑",
-    "provider": "⚙️",
-    "rag_settings": "🛠️",
-    "new_chat": "➕",
-    "remote": "🚀",
-    "local": "💻",
-    "tasks": "🔀",
-    "eosc": "🚀",
-    "email": "📬",
-}
-
-# Centralized page configuration
-pages_config = [
-    {"key": "home", "title": "Home", "page": "app.py", "icon_key": "home"},
-    {
-        "key": "general_chat",
-        "title": "Chat",
-        "page": "pages/general_purpose_chat.py",
-        "icon_key": "chat",
-    },
-    {
-        "key": "rsqkit_chat",
-        "title": "RSQKit Chat",
-        "page": "pages/rsqkit_rag_chat.py",
-        "icon_key": "rsqkit_chat",
-    },
-    {
-        "key": "document_chat",
-        "title": "Document Chat",
-        "page": "pages/document_chat.py",
-        "icon_key": "document_chat",
-    },
-    {
-        "key": "collections",
-        "title": "Collections",
-        "page": "pages/collections.py",
-        "icon_key": "collections",
-    },
-    {
-        "key": "rag_collections",
-        "title": "RAG on a collection",
-        "page": "pages/rag_on_collection.py",
-        "icon_key": "rag_collections",
-    },
-    {"key": "tasks", "title": "Tasks", "page": "pages/tasks.py", "icon_key": "tasks"},
-]
+from typing import Dict, Any
+from functools import lru_cache
+from core_utils.health_api import check_api_key, check_health_api, get_available_models
+from app_config import (
+    get_selected_llm_key,
+    get_provider_key_page,
+    get_page_icon_mapping,
+    pages_config,
+    ICONS,
+    pages,
+    display_navigation_links,
+    ensure_session_state_key,
+    safe_get_session_state,
+    init_page_session_state,
+    init_global_session_state,
+)
+from ui.ui_llm_settings import display_llm_settings
 
 
-# Generate the pages dictionary from the configuration
-pages = {
-    page["key"]: st.Page(page["page"], title=page["title"]) for page in pages_config
-}
+# Pure functions - use @lru_cache for better performance
+@lru_cache(maxsize=128)
+def get_provider_icon_mapping():
+    """Cache the provider icon mapping - pure function"""
+    return {
+        key: ICONS["local"] if key == "ollama" else ICONS["remote"]
+        for key in PROVIDER_ID_TO_NAME.keys()
+    }
 
 
-def display_navigation_links():
-    """Navigation sidebar sans provider selection"""
-    with st.sidebar:
-        # Injection du CSS
-        st.markdown(SIDEBAR_STYLE, unsafe_allow_html=True)
-        for page in pages_config:
-            icon = ICONS[page["icon_key"]]
-            st.page_link(pages[page["key"]], label=f"{icon} {page['title']}")
+@lru_cache(maxsize=128)
+def get_provider_options():
+    """Cache provider options with icons - pure function"""
+    icon_mapping = get_provider_icon_mapping()
+    return {
+        display_name: f"{icon_mapping[key]} {display_name}"
+        for key, display_name in PROVIDER_ID_TO_NAME.items()
+    }
 
 
-# Helper function to get the appropriate icon for AI provider
-def get_icon(provider_key):
+@lru_cache(maxsize=128)
+def get_icon(provider_key: str) -> str:
+    """Get icon for provider with caching - pure function"""
     return ICONS["local"] if provider_key == "ollama" else ICONS["remote"]
 
 
-# Function to reset chat messages for a given page
+# External state functions - keep @st.cache_data
+@st.cache_data(ttl=60)
+def get_provider_status(provider: str) -> Dict[str, Any]:
+    """Get provider API key and health status with caching"""
+    return {
+        "has_api_key": check_api_key(provider=provider),
+        "is_healthy": check_health_api(provider=provider) != StatusAPI.DOWN,
+    }
+
+
+@st.cache_data(ttl=300)
+def get_cached_models(provider: str):
+    """Get available models with caching"""
+    return get_available_models(provider=provider)
+
+
+# Batch configuration loading with defensive checks
+@st.cache_data
+def get_sidebar_config(page_key: str) -> Dict[str, Any]:
+    """Get all sidebar configuration at once to minimize cache calls"""
+    # Ensure session state is initialized
+    init_page_session_state(page_key)
+
+    provider_page_key = get_provider_key_page(page_key)
+    provider = safe_get_session_state(provider_page_key, "")
+
+    config = {
+        "page_icons": get_page_icon_mapping(),
+        "provider_options": get_provider_options(),
+        "provider": provider,
+        "provider_page_key": provider_page_key,
+        "needs_provider_selection": page_key != COLLECTIONS_SESSION,
+        "needs_model_selection": page_key != COLLECTIONS_SESSION,
+    }
+
+    # Only fetch expensive data if provider is selected
+    if provider:
+        try:
+            config["provider_status"] = get_provider_status(provider)
+            config["available_models"] = get_cached_models(provider)
+        except Exception as e:
+            st.error(f"Error loading provider data: {e}")
+            config["provider_status"] = {"has_api_key": False, "is_healthy": False}
+            config["available_models"] = {"llms": [], "vlms": []}
+
+    return config
+
+
 def reset_chat(page_key: str):
     """Reset chat messages for a given page"""
-    st.session_state[page_key]["messages"] = []
+    ensure_session_state_key(page_key, {"messages": []})
+    if page_key in st.session_state and isinstance(st.session_state[page_key], dict):
+        st.session_state[page_key]["messages"] = []
+    else:
+        st.session_state[page_key] = {"messages": []}
 
 
-# Function to render provider selection
-def render_provider_selection(page_key: str):
+def render_provider_selection(config: Dict[str, Any]):
+    """Render provider selection using pre-loaded config"""
+    provider_page_key = config["provider_page_key"]
+    current_provider = config["provider"]
+
     with st.expander(f"{ICONS['provider']} AI Provider", expanded=True):
-        provider_options = {
-            display_name: f"{get_icon(key)} {display_name}"
-            for key, display_name in PROVIDER_ID_TO_NAME.items()
-        }
+        provider_options = config["provider_options"]
+
+        # Get current index safely
+        current_index = 0
+        if current_provider and current_provider in provider_options:
+            current_index = list(provider_options.keys()).index(current_provider)
+        elif len(provider_options) > 1:
+            current_index = 1
+
         provider = st.radio(
             label="Provider",
             options=list(provider_options.keys()),
             format_func=lambda x: provider_options[x],
-            index=0,
+            index=current_index,
             label_visibility="hidden",
+            key=f"provider_radio_{provider_page_key}",  # Explicit key
         )
-        # Update session state
-        if "provider" not in st.session_state:
-            st.session_state[f"provider_{page_key}"] = provider
-        if not check_api_key(provider=provider):
-            st.error(f"Missing API key for {provider}")
+
+        # Update session state if provider changed
+        if provider != current_provider:
+            st.session_state[provider_page_key] = provider
+            # Clear cache to force refresh
+            get_sidebar_config.clear()
+            st.rerun()
+
+        # Show status if available in config
+        if provider and "provider_status" in config:
+            status = config["provider_status"]
+
+            if not status["has_api_key"]:
+                st.error(f"Missing API_KEY for {provider}")
+
+            if not status["is_healthy"]:
+                st.write(f"API is down {ICONS['api_down']}")
+
+
+def render_model_selection(page_key: str, config: Dict[str, Any]):
+    """Render model selection using pre-loaded config"""
+    provider = config["provider"]
+
+    if not provider:
+        st.warning("Please select a provider first.")
+        return
+
+    # Only render if models are available in config
+    if "available_models" not in config:
+        st.warning("Loading models...")
+        return
+
+    available_models = config["available_models"]
+    llm_key = get_selected_llm_key(page_key=page_key, provider=provider)
+
+    # Combine LLM and VLM models
+    llms_vlms_models = available_models.get("llms", []) + available_models.get(
+        "vlms", []
+    )
+
+    if llms_vlms_models:
+        # Ensure the LLM key exists in session state
+        default_model = llms_vlms_models[-1] if llms_vlms_models else ""
+        ensure_session_state_key(llm_key, default_model)
+
+        st.selectbox(
+            label="LLMs",
+            options=llms_vlms_models,
+            index=len(llms_vlms_models) - 1,
+            label_visibility="hidden",
+            key=llm_key,
+        )
+        display_llm_settings()
+    else:
+        st.warning("No models available for this provider.")
 
 
 def render_navigation_links():
-    for page in pages_config:
-        icon = ICONS[page["icon_key"]]
-        st.page_link(pages[page["key"]], label=f"{icon} {page['title']}")
-
-
-# Main sidebar rendering function
-def sidebar(page_key: str):
+    """Render navigation links with cached icons"""
     display_navigation_links()
-    with st.sidebar:
-        # Divider
-        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-        # New chat button
-        if page_key != COLLECTIONS_SESSION:
-            if st.button(
-                f"{ICONS['new_chat']} New Chat",
-                help="Start a new chat",
-                use_container_width=True,
-            ):
-                reset_chat(page_key)
-                st.success("✅ New chat started!")
 
-        # Provider selection
-        render_provider_selection(page_key)
+# Main sidebar rendering function - optimized with defensive checks
+def sidebar(page_key: str):
+    """Main sidebar function with optimized rendering and defensive session state"""
+    try:
+        # Initialize session state first
+        init_page_session_state(page_key)
+
+        # Load all config at once
+        config = get_sidebar_config(page_key)
+
+        # Display navigation links
+        render_navigation_links()
+
+        with st.sidebar:
+            # Divider
+            st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+
+            # New chat button (conditional rendering)
+            if config["needs_provider_selection"]:
+                if st.button(
+                    f"{ICONS['new_chat']} New Chat",
+                    help="Start a new chat",
+                    use_container_width=True,
+                    key=f"new_chat_{page_key}",  # Explicit key
+                ):
+                    reset_chat(page_key)
+                    st.success("✅ New chat started!")
+
+            # Provider selection (conditional rendering)
+            if config["needs_provider_selection"]:
+                render_provider_selection(config)
+
+            # Model selection (conditional rendering)
+            if config["needs_model_selection"]:
+                with st.expander("Select LLM", expanded=False):
+                    init_global_session_state()
+                    render_model_selection(page_key, config)
+
+    except Exception as e:
+        st.error(f"Error rendering sidebar: {e}")
+        st.write("Please refresh the page or check the console for more details.")
+
+
+# Debug function to check session state (optional)
+def debug_session_state():
+    """Debug function to inspect session state - remove in production"""
+    if st.checkbox("Show Session State Debug"):
+        st.write("Session State Keys:")
+        for key, value in st.session_state.items():
+            st.write(f"- {key}: {type(value)} = {value}")

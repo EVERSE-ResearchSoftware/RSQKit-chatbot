@@ -1,12 +1,13 @@
+
 import streamlit as st
 from streamlit import session_state
 from llms.openai_interface import get_chat_response_stream
 from task_modules.base_task import BaseTask
-from llm_provider_tools import _get_ai_resources
+from llm_provider_tools import _get_provider_config
 
 
 class CodeReviewTask(BaseTask):
-    def __init__(self, task_name, config, provider):
+    def __init__(self, task_name, task_config, provider):
         """
         Initialize the CodeReviewTask with the given configuration and provider.
 
@@ -15,8 +16,8 @@ class CodeReviewTask(BaseTask):
             config (dict): Configuration dictionary containing prompt and other settings.
             provider (str): Name of the AI provider to use.
         """
-        super().__init__(task_name, config, provider)
-        self.provider_resources = _get_ai_resources(provider=provider)
+        super().__init__(task_name, task_config, provider)
+        self.provider_config = _get_provider_config(provider=provider)
         self.session_key = "code_review"  # Fixed session key for this task
 
     def render_ui(self):
@@ -92,17 +93,14 @@ class CodeReviewTask(BaseTask):
 
         try:
             # Validate that the model is available
-            if (
-                not self.provider_resources
-                or "default_llm" not in self.provider_resources
-            ):
+            if not self.provider_config or "default_llm" not in self.provider_config:
                 raise ValueError(
                     "No default model available for the selected provider."
                 )
 
             # Stream the response from the model
             for token in get_chat_response_stream(
-                model_name=self.provider_resources["default_llm"],
+                model_name=self.provider_config["default_llm"],
                 messages=session_state[session_key]["messages"],
                 provider=self.provider,
             ):
@@ -115,3 +113,5 @@ class CodeReviewTask(BaseTask):
         except Exception as e:
             st.error(f"Error generating response: {str(e)}")
             return
+
+

@@ -1,10 +1,11 @@
 import streamlit as st
 import chromadb
 from chroma_data_ingestor import get_embedding
-from ui.header import sidebar, ICONS
+from ui.header import sidebar
+from app_config import ICONS
 from ui.custom_display import view_sources
 from ui.custom_styles import CSS_CONTENT, inject_page_styles
-from ui.rag_settings_ui import display_rag_settings
+from ui.ui_rag_settings import get_rag_settings, display_rag_settings
 from settings import CHROMA_PERSIST_DIR
 from llm_provider_tools import (
     get_embedding,
@@ -21,26 +22,28 @@ from core_utils.retrieval_utils import (
     create_multi_retrieval_engine,
     agentic_query_processing,
 )
+from ui.handle_session_state import get_selected_llm
 
 
 load_dotenv()
-RSQ_KIT_RAG_SESSION_KEY = "RSQ_KIT_RAG"
-RSQ_KIT_CHROMA_COLLECTION = "rsqkit"
 
-# Streamlit App Configuration
-st.set_page_config(
-    page_title="RSQKit Chatbot",
-    page_icon=ICONS["rsqkit_chat"],
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+RSQ_KIT_CHROMA_COLLECTION = "rsqkit"
+current_page_key = "RSQ_KIT_RAG"
+
+
 
 st.markdown(CSS_CONTENT, unsafe_allow_html=True)
 
 # Sidebar and model setup
-sidebar(page_key=RSQ_KIT_RAG_SESSION_KEY)
-selected_provider = st.session_state[f"provider_{RSQ_KIT_RAG_SESSION_KEY}"]
-llm_model = get_default_llm(selected_provider=selected_provider)
+sidebar(page_key=current_page_key)
+
+selected_provider = st.session_state[f"provider_{current_page_key}"]
+# update llm to use the one on sidebar
+llm_model = get_selected_llm(
+    page_key=current_page_key, provider=selected_provider
+) or get_default_llm(selected_provider=selected_provider)
+
+
 chat_function = get_chat_response_stream
 
 inject_page_styles()
@@ -69,15 +72,15 @@ def initialize_components():
 
 
 def init_rag_bot_messages():
-    if RSQ_KIT_RAG_SESSION_KEY not in st.session_state:
-        st.session_state[RSQ_KIT_RAG_SESSION_KEY] = {
+    if current_page_key not in st.session_state:
+        st.session_state[current_page_key] = {
             "messages": [{"role": "system", "content": RAG_SYSTEM_PROMPT}],
             "retrieval_history": [],
         }
 
 
 def display_chat_history():
-    for message in st.session_state[RSQ_KIT_RAG_SESSION_KEY]["messages"]:
+    for message in st.session_state[current_page_key]["messages"]:
         if message["role"] != "system":
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
@@ -92,7 +95,9 @@ def main():
 
     if not documents:
         if st.chat_input("Ask a question..."):
-            st.info("There are no documents in the collection 'documents'.")
+            st.info(
+                f"There are no documents in the collection '{RSQ_KIT_CHROMA_COLLECTION}'."
+            )
         return
 
     # Initialize components
@@ -102,14 +107,8 @@ def main():
     display_chat_history()
 
     # Multi-retrieval controls in sidebar
-
-    settings_for_rag = display_rag_settings()
-    enable_multi_retrieval = settings_for_rag["enable_multi_retrieval"]
-    show_retrieval_details = settings_for_rag["show_retrieval_details"]
-    show_decomposition = settings_for_rag["show_decomposition"]
-    max_subqueries = settings_for_rag["max_subqueries"]
-    default_strategy = settings_for_rag["default_strategy"]
-    # Chat input
+    display_rag_settings()
+    settings_for_rag = get_rag_settings()
     query = st.chat_input("Ask a question (you can ask multiple questions at once)...")
 
     if query:
@@ -126,14 +125,10 @@ def main():
             llm_model=llm_model,
             multi_retrieval_engine=multi_retrieval_engine,
             hybrid_searcher=hybrid_searcher,
-            show_decomposition=show_decomposition,
-            default_strategy=default_strategy,
-            show_retrieval_details=show_retrieval_details,
-            max_subqueries=max_subqueries,
             view_sources=view_sources,
-            enable_multi_retrieval=enable_multi_retrieval,
             build_rag_context=build_rag_context,
-            session_key=RSQ_KIT_RAG_SESSION_KEY,
+            session_key=current_page_key,
+            **settings_for_rag,
         )
 
 

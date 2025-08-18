@@ -6,7 +6,7 @@ from core_utils.retrieval_utils import (
     agentic_query_processing,
     create_multi_retrieval_engine,
 )
-from ui.rag_settings_ui import display_rag_settings
+from ui.ui_rag_settings import display_rag_settings, get_rag_settings
 
 from dotenv import load_dotenv
 from chroma_data_ingestor import (
@@ -14,7 +14,8 @@ from chroma_data_ingestor import (
     create_batch_embeddings,
     add_nodes_to_chroma,
 )
-from ui.header import sidebar, ICONS
+from ui.header import sidebar
+from app_config import ICONS, DOCUMENT_CHAT_COLLECTION
 from ui.custom_styles import CSS_CONTENT, inject_page_styles
 from settings import CHROMA_PERSIST_DIR, DOCUMENTS_DIR
 from prompt_templates.prompt_builder import build_rag_context
@@ -25,42 +26,33 @@ from llm_provider_tools import (
 )
 from llms.openai_interface import get_chat_response_stream
 from ui.custom_display import view_sources
+from ui.handle_session_state import get_selected_llm
 
 
 load_dotenv()
 
-DOC_RAG_SESSION = "DOC_RAG"
+current_page_key = "document_chat"
 
 # Initialize persistent ChromaDB client
 db_client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
-temporary_collection = f"documents_{DOC_RAG_SESSION}_temp"
+temporary_collection = DOCUMENT_CHAT_COLLECTION
 collection = db_client.get_or_create_collection(temporary_collection)
 
 # Path to your text documents
 docs_path = DOCUMENTS_DIR
 
-# ----
-
-
-st.set_page_config(
-    page_title="Document Chat",
-    page_icon=ICONS["document_chat"],
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-# ---css for expander
 
 st.markdown(CSS_CONTENT, unsafe_allow_html=True)
 
 
-# ---- end css
+sidebar(page_key=current_page_key)
 
-
-sidebar(page_key=DOC_RAG_SESSION)
-
-selected_provider = st.session_state[f"provider_{DOC_RAG_SESSION}"]
+selected_provider = st.session_state[f"provider_{current_page_key}"]
 chat_function = get_chat_response_stream
-llm_model = get_default_llm(selected_provider=selected_provider)
+llm_model = get_selected_llm(
+    page_key=current_page_key, provider=selected_provider
+) or get_default_llm(selected_provider=selected_provider)
+
 inject_page_styles()
 st.markdown(
     f'<h1 class="main-title">{ICONS["document_chat"]} Document Chat</h1>',
@@ -84,13 +76,13 @@ def initialize_components():
 
 # Chat history
 def init_rag_bot_messages():
-    if DOC_RAG_SESSION not in st.session_state:
-        st.session_state[DOC_RAG_SESSION] = {"messages": [], "retrieval_history": []}
+    if current_page_key not in st.session_state:
+        st.session_state[current_page_key] = {"messages": [], "retrieval_history": []}
 
 
 # Display chat history
 def display_chat_history():
-    for message in st.session_state[DOC_RAG_SESSION]["messages"]:
+    for message in st.session_state[current_page_key]["messages"]:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
@@ -200,7 +192,7 @@ def main():
                 st.markdown(query)
 
             # Add user message to session state
-            st.session_state[DOC_RAG_SESSION]["messages"].append(
+            st.session_state[current_page_key]["messages"].append(
                 {"role": "user", "content": query}
             )
 
@@ -211,14 +203,14 @@ def main():
 
                 for token in chat_function(
                     model_name=llm_model,
-                    messages=st.session_state[DOC_RAG_SESSION]["messages"],
+                    messages=st.session_state[current_page_key]["messages"],
                     provider=selected_provider,
                 ):
                     full_resp += token
                     placeholder.write(full_resp)
 
             # Store assistant response
-            st.session_state[DOC_RAG_SESSION]["messages"].append(
+            st.session_state[current_page_key]["messages"].append(
                 {"role": "assistant", "content": full_resp}
             )
         return
@@ -231,12 +223,8 @@ def main():
         return
 
     # Set hybrid searcher weight
-    settings_for_rag = display_rag_settings()
-    enable_multi_retrieval = settings_for_rag["enable_multi_retrieval"]
-    show_retrieval_details = settings_for_rag["show_retrieval_details"]
-    show_decomposition = settings_for_rag["show_decomposition"]
-    max_subqueries = settings_for_rag["max_subqueries"]
-    default_strategy = settings_for_rag["default_strategy"]
+    display_rag_settings()
+    settings_for_rag = get_rag_settings()
 
     if query:
         with st.chat_message("user"):
@@ -251,14 +239,10 @@ def main():
             llm_model=llm_model,
             multi_retrieval_engine=multi_retrieval_engine,
             hybrid_searcher=hybrid_searcher,
-            show_decomposition=show_decomposition,
-            default_strategy=default_strategy,
-            show_retrieval_details=show_retrieval_details,
-            max_subqueries=max_subqueries,
             view_sources=view_sources,
-            enable_multi_retrieval=enable_multi_retrieval,
             build_rag_context=build_rag_context,
-            session_key=DOC_RAG_SESSION,
+            session_key=current_page_key,
+            **settings_for_rag,
         )
 
 

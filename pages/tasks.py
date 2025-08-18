@@ -1,13 +1,18 @@
 import streamlit as st
+from settings import RESOURCES
 from llm_provider_tools import (
     get_default_llm,
     get_default_vison_model,
     resolve_vision_function,
+    _get_resource_key,
 )
 from llms.openai_interface import get_chat_response_stream
-from ui.header import sidebar, ICONS
+from ui.header import sidebar
 from ui.custom_styles import inject_page_styles
+from PIL import Image
+import os
 from dotenv import load_dotenv
+from datetime import datetime
 
 from task_modules.code_review_task import CodeReviewTask
 from task_modules.ai_ocr_task import AIOCRTask
@@ -16,12 +21,18 @@ from task_modules.ai_ocr_task import AIOCRTask
 load_dotenv()
 
 # Constants
-TASK_SESSION_KEY = "TASK_SESSION"
+current_page_key = "tasks"
+EMAIL_CLASSIFIER = "Email Classifier"
 CODE_REVIEW = "Code Reviewer"
 AI_OCR = "AI-OCR"
 README_GENERATOR = "README Generator"
 
 
+# Get today's date
+today = datetime.now()
+
+# Format the date as Month_name Day Number Year
+formatted_date = today.strftime("%B %-d %Y")
 # Task configurations
 TASK_CONFIG = {
     CODE_REVIEW: {
@@ -37,27 +48,17 @@ Improve the above code to make it robust, maintainable and easy to read. Explain
 
 
 TASK_REGISTRY = {
+    # "Email Classifier": EmailClassifierTask,
     CODE_REVIEW: CodeReviewTask,
     AI_OCR: AIOCRTask,
 }
 
 
-###
-def initialize_page_config():
-    """Initialize Streamlit page configuration."""
-    st.set_page_config(
-        page_title="TASK Chatbot",
-        page_icon=ICONS["chat"],
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
-
-
 def initialize_session_state():
     """Initialize session state variables in the correct order."""
     # Initialize main task session if not exists
-    if TASK_SESSION_KEY not in st.session_state:
-        st.session_state[TASK_SESSION_KEY] = {}
+    if current_page_key not in st.session_state:
+        st.session_state[current_page_key] = {}
 
 
 def get_task_selection():
@@ -156,12 +157,18 @@ def render_page_header(selected_task):
 
     task_title = TASK_CONFIG[selected_task]["title"]
     st.markdown(f'<h1 class="main-title">{task_title}</h1>', unsafe_allow_html=True)
+    if selected_task == SUMMARY_GENERATOR:
+        with st.sidebar:
+            n_sentences = st.select_slider(
+                label="n_sentences", options=[i for i in range(3, 10)]
+            )
+            return n_sentences
 
 
 def main():
     """Main application function."""
     # Initialize page configuration
-    initialize_page_config()
+    # initialize_page_config()
 
     # Initialize session state
     initialize_session_state()
@@ -169,7 +176,7 @@ def main():
     # Get task selection
     selected_task = get_task_selection()
     # Initialize task-specific messages
-    selected_task_session = f"{TASK_SESSION_KEY}_{selected_task}"
+    selected_task_session = f"{current_page_key}_{selected_task}"
     initialize_task_messages(selected_task_session)
 
     selected_provider = get_provider(selected_task_session=selected_task_session)
@@ -182,7 +189,7 @@ def main():
     task_class = TASK_REGISTRY[selected_task]
     task_instance = task_class(
         task_name=selected_task,
-        config=TASK_CONFIG[selected_task],
+        task_config=TASK_CONFIG[selected_task],
         provider=selected_provider,
     )
 
