@@ -8,14 +8,13 @@ from chroma_data_ingestor import (
     create_batch_embeddings,
     add_nodes_to_chroma,
 )
-from ui.header import sidebar, ICONS
-from settings import CHROMA_PERSIST_DIR, COLLECTIONS_SESSION, DOCUMENTS_DIR
+from ui.header import sidebar
+from app_config import ICONS
+from settings import CHROMA_PERSIST_DIR, DOCUMENTS_DIR
 from collections import defaultdict
 from ui.custom_styles import CSS_CONTENT, inject_page_styles
 
-
 load_dotenv()
-
 
 # Initialize persistent ChromaDB client
 client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
@@ -23,19 +22,13 @@ client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
 # Path to your text documents
 docs_path = DOCUMENTS_DIR
 
-
-st.set_page_config(
-    page_title="Collections Management",
-    page_icon=ICONS["collections"],
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
 # CSS for styling
 st.markdown(CSS_CONTENT, unsafe_allow_html=True)
 
-sidebar(page_key=COLLECTIONS_SESSION)
-selected_provider = st.session_state[f"provider_{COLLECTIONS_SESSION}"]
+current_page_key = "collections"
+
+sidebar(page_key=current_page_key)
+selected_provider = st.session_state[f"provider_{current_page_key}"]
 
 inject_page_styles()
 st.markdown(

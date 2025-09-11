@@ -2,9 +2,10 @@ import streamlit as st
 import chromadb
 from core_utils.hybrid_search import HybridSearch
 from core_utils.retrieval_utils import agentic_query_processing
-from ui.rag_settings_ui import display_rag_settings
+from ui.ui_rag_settings import display_rag_settings, get_rag_settings
 from dotenv import load_dotenv
-from ui.header import sidebar, ICONS
+from ui.header import sidebar
+from app_config import ICONS, DOCUMENT_CHAT_COLLECTION
 from ui.custom_styles import CSS_CONTENT, inject_page_styles
 from settings import CHROMA_PERSIST_DIR
 from ui.custom_display import view_sources
@@ -18,6 +19,7 @@ from llm_provider_tools import (
 from core_utils.retrieval_utils import (
     create_multi_retrieval_engine,
 )
+from ui.handle_session_state import get_selected_llm
 
 load_dotenv()
 
@@ -25,14 +27,7 @@ load_dotenv()
 # ----
 
 
-COLLECTION_RAG_SESSION = "COLLECTION_RAG_SESSION"
-
-st.set_page_config(
-    page_title="RAG On a Collection",
-    page_icon=ICONS["rag_collections"],
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+current_page_key = "rag_collections"
 
 
 st.markdown(CSS_CONTENT, unsafe_allow_html=True)
@@ -52,7 +47,7 @@ chroma_client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
 collections = [
     col.name
     for col in chroma_client.list_collections()
-    if col.name != "documents_DOC_RAG_temp"
+    if col.name != DOCUMENT_CHAT_COLLECTION
 ]
 if not collections:
     st.info("No collections available. Please create a collection first.")
@@ -63,15 +58,17 @@ selected_collection = st.selectbox(
 )
 
 # tracking_key
-collection_tracking_key = rf"{COLLECTION_RAG_SESSION}_{selected_collection}"
+collection_tracking_key = rf"{current_page_key}_{selected_collection}"
 collection = chroma_client.get_or_create_collection(selected_collection)
 
 sidebar(page_key=collection_tracking_key)
 
 selected_provider = st.session_state[
-    f"provider_{COLLECTION_RAG_SESSION}_{selected_collection}"
-]
-llm_model = get_default_llm(selected_provider=selected_provider)
+    f"provider_{current_page_key}_{selected_collection}"
+]  # to track chat history per collection
+llm_model = get_selected_llm(
+    page_key=collection_tracking_key, provider=selected_provider
+) or get_default_llm(selected_provider=selected_provider)
 chat_function = get_chat_response_stream
 
 
@@ -125,13 +122,8 @@ def main():
         st.error("Unable to load RAG engine.")
         return
 
-    settings_for_rag = display_rag_settings()
-    enable_multi_retrieval = settings_for_rag["enable_multi_retrieval"]
-    show_retrieval_details = settings_for_rag["show_retrieval_details"]
-    show_decomposition = settings_for_rag["show_decomposition"]
-    max_subqueries = settings_for_rag["max_subqueries"]
-    default_strategy = settings_for_rag["default_strategy"]
-    # Initialize multi-retrieval engine
+    display_rag_settings()
+    settings_for_rag = get_rag_settings()
 
     # Chat input
     query = st.chat_input("Ask a question...")
@@ -150,16 +142,13 @@ def main():
             llm_model=llm_model,
             multi_retrieval_engine=multi_retrieval_engine,
             hybrid_searcher=hybrid_searcher,
-            show_decomposition=show_decomposition,
-            default_strategy=default_strategy,
-            show_retrieval_details=show_retrieval_details,
-            max_subqueries=max_subqueries,
             view_sources=view_sources,
-            enable_multi_retrieval=enable_multi_retrieval,
             build_rag_context=build_rag_context,
             session_key=collection_tracking_key,
+            **settings_for_rag,
         )
 
 
 if __name__ == "__main__":
     main()
+

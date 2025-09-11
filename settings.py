@@ -1,6 +1,8 @@
 from pathlib import Path
 import os
 import yaml
+from typing import List, TypedDict
+from dataclasses import dataclass
 
 
 # Define a class for configuration keys
@@ -27,9 +29,41 @@ class ConfigKeys:
     CHROMA_PERSIST_DIR = "chroma_persist_dir"
 
 
+class StatusAPI:
+    UP = "up"
+    DOWN = "down"
+
+
+class ModelTypeKeys:
+    EMBEDDINGS = "embeddings"
+    LLMS = "llms"
+    VLMS = "vlms"
+    RERANKERS = "rerankers"
+    TRANSCRIPTION = "transcriptions"
+
+    EMBEDDINGS_API_TYPE = "text-embeddings-inference"
+    LLMS_API_TYPE = "text-generation"
+    VLMS_API_TYPE = "image-text-to-text"
+    RERANKERS_API_TYPE = "text-classification"
+    TRANSCRIPTION_API_TYPE = "automatic-speech-recognition"
+
+
+class ModelTypes(TypedDict):
+    embeddings: List[str]
+    llms: List[str]
+    vlms: List[str]
+    rerankers: List[str]
+    audio_texts: List[str]
+
+
+class StreamlitKeys:
+    SELECTED_LLM_PROVIDER = "selected_llm_provider"
+
+
 # Define paths to YAML configuration files
 YAML_CONFIG_PATH = Path(__file__).resolve().parent / "provider_config.yaml"
 YAML_DIRECTORIES_PATH = Path(__file__).resolve().parent / "directories.yaml"
+EMAIL_SETTINGS_FILE = Path(__file__).resolve().parent / "email_settings.yaml"
 
 
 def load_yaml(file_path):
@@ -49,6 +83,7 @@ def load_yaml(file_path):
 YAML_CONFIG_PROVIDERS = load_yaml(YAML_CONFIG_PATH)
 YAML_CONFIG_DIRECTORIES = load_yaml(YAML_DIRECTORIES_PATH)
 
+
 # Extract configuration from YAML
 DIRECTORIES = YAML_CONFIG_DIRECTORIES.get(ConfigKeys.DIRECTORIES, {})
 CONFIG_PROVIDERS = YAML_CONFIG_PROVIDERS.get(ConfigKeys.PROVIDERS, {})
@@ -62,7 +97,7 @@ PROVIDER_TO_RESOURCE_KEY = {value: key for key, value in PROVIDER_ID_TO_NAME.ite
 
 # Define constants
 COLLECTIONS_SESSION = "COLLECTIONS_SESSION"
-
+PERMANENT_CHROMA_COLLECTION = "permanent_collection"
 # Set up directories
 DOCUMENTS_DIR = str(
     Path(__file__).resolve().parent / DIRECTORIES.get(ConfigKeys.DOCUMENTS_DIR, "")
