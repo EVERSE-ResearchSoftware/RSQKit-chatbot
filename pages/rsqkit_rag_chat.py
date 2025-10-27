@@ -151,11 +151,12 @@ from llms.openai_interface import get_chat_response_stream
 from core_utils.rag_hybrid_utils import initialize_components
 from core_utils.retrieval_utils import agentic_query_processing
 from app_config import get_selected_llm
+from settings import RSQ_KIT_CHROMA_COLLECTION
 
 load_dotenv()
 
 
-RSQ_KIT_CHROMA_COLLECTION = "rsqkit"
+
 current_page_key = "RSQ_KIT_RAG"
 # ===== OPTIMIZATION 1: Cache expensive operations =====
 @st.cache_resource

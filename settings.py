@@ -141,6 +141,7 @@ PROVIDER_TO_RESOURCE_KEY = {value: key for key, value in PROVIDER_ID_TO_NAME.ite
 # Define constants
 COLLECTIONS_SESSION = "COLLECTIONS_SESSION"
 PERMANENT_CHROMA_COLLECTION = "permanent_collection"
+RSQ_KIT_CHROMA_COLLECTION = "rsqkit"
 # Set up directories
 DOCUMENTS_DIR = str(
     Path(__file__).resolve().parent / DIRECTORIES.get(ConfigKeys.DOCUMENTS_DIR, "")
