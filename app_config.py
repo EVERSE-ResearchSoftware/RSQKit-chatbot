@@ -141,12 +141,6 @@ pages_config = {
         "icon_key": "tasks",
         "session_key": "tasks",
     },
-    # "email": {
-    #     "title": "Email Classifier",
-    #     "page": "pages/email_classifier.py",
-    #     "icon_key": "email",
-    #     "session_key": "email",
-    # },
 }
 
 DOCUMENT_CHAT_COLLECTION = pages_config["document_chat"]["collection"]
