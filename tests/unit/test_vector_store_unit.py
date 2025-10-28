@@ -2,6 +2,7 @@ import os
 import pytest
 from unittest.mock import Mock, patch, mock_open
 from chroma_data_ingestor import ingest_data
+from settings import RSQ_KIT_CHROMA_COLLECTION
 
 
 @patch("chroma_data_ingestor.add_nodes_to_chroma")
@@ -34,16 +35,16 @@ def test_ingest_data_success(
     # Assertions
     mock_listdir.assert_called_once_with("test_directory")
     mock_node_pipeline.assert_any_call(
-        file_path="test_directory/file1.txt", chunk_size=1000, chunk_overlap=100
+        file_path="test_directory/file1.txt", chunk_size=1000, chunk_overlap=0
     )
     mock_node_pipeline.assert_any_call(
-        file_path="test_directory/file2.txt", chunk_size=1000, chunk_overlap=100
+        file_path="test_directory/file2.txt", chunk_size=1000, chunk_overlap=0
     )
     mock_create_batch_embeddings.assert_called_once_with(
         nodes=["node_test_directory/file1.txt", "node_test_directory/file2.txt"],
         provider="provider_name",
     )
-    mock_get_or_create_collection.assert_called_once_with("rsqkit")
+    mock_get_or_create_collection.assert_called_once_with(RSQ_KIT_CHROMA_COLLECTION)
     mock_add_nodes_to_chroma.assert_called_once_with(
         collection=mock_get_or_create_collection.return_value,
         nodes=["node_test_directory/file1.txt", "node_test_directory/file2.txt"],

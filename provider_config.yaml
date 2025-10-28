@@ -3,6 +3,7 @@ providers:
     name: "Ollama"
     base_url: "http://localhost:11434/v1"
     base_url_vision: "http://localhost:11434/v1/chat/completions"
+    base_url_embedding: ""
     rerank_url: null
     api_env_var: "OLLAMA_API_KEY"
     fall_back_provider: "ollama"
@@ -11,13 +12,15 @@ providers:
     models:
       default_embedding: "bge-m3"
       default_reranker: null
-      default_llm: "deepseek-r1:14b" # change accordingly for smaller models
-      default_vision: "llama3.2-vision" # same here
-    
+      default_llm: "llama3.2-vision:latest" #"deepseek-r1:14b"
+      default_vision: "llama3.2-vision"
+
+
   eosc:
     name: "AI4EOSC"
     base_url: "https://llm.dev.ai4eosc.eu:8000/v1"
     base_url_vision: "https://llm.dev.ai4eosc.eu:8000/v1/chat/completions"
+    base_url_embedding: ""
     rerank_url: null
     api_env_var: "API_KEY_EOSC_KEYCLOACK"
     fall_back_provider: "ollama"
@@ -27,12 +30,13 @@ providers:
       default_embedding: null
       default_reranker: null
       default_llm: "AI4EOSC/Qwen3"
-      default_vision: "AI4EOSC/Small"
+      default_vision: "AI4EOSC/Devstral"
   
   # new_provider:
   #   name: "Example Provider"
   #   base_url: "https://api.exampleprovider.com/v1"
   #   base_url_vision: "https://api.exampleprovider.com/v1/chat/completions"
+  #   base_url_embedding: ""
   #   rerank_url: "https://api.exampleprovider.com/v1/rerank"
   #   api_env_var: "API_KEY_EXAMPLE_PROVIDER"
   #   fall_back_provider: "ollama"

@@ -4,7 +4,7 @@ import argparse
 from core_utils.document_reader.reader import FileReader
 from core_utils.text_chunking.text_chunker import TextChunker
 from llm_provider_tools import get_embedding
-from settings import DOCUMENTS_DIR, PROVIDER_ID_TO_NAME
+from settings import DOCUMENTS_DIR, PROVIDER_ID_TO_NAME, RSQ_KIT_CHROMA_COLLECTION
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,16 +17,13 @@ collection = client.get_or_create_collection("rsqkit")
 input_directory = DOCUMENTS_DIR
 
 
-# Embedding function using api
-
-
 # Load and store embeddings
 def ingest_data(
     provider: str,
     directory: str = input_directory,
     chunk_size: int = 1000,
-    chunk_overlap: int = 100,
-    collection_name: str = "rsqkit",
+    chunk_overlap: int = 0,  # was 100 due to post-chunk-extension
+    collection_name: str = RSQ_KIT_CHROMA_COLLECTION,
 ) -> None:
     """
     Ingest data from a directory of documents and store them in a vector store.
@@ -88,7 +85,7 @@ def create_batch_embeddings(nodes, provider: str, batch_size=10):
             node.embedding = emb
 
 
-def node_pipeline(file_path, chunk_size: int = 1000, chunk_overlap: int = 100):
+def node_pipeline(file_path, chunk_size: int = 1000, chunk_overlap: int = 0):
     """
     Processes a file by reading it, chunking the text, and returning the nodes.
 
@@ -145,7 +142,6 @@ def add_nodes_to_chroma(collection, nodes, batch_size=10):
         collection.add(
             ids=ids, documents=contents, embeddings=embeddings, metadatas=metadata
         )
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ingest documents into ChromaDB.")

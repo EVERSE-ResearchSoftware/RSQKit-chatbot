@@ -1,43 +1,56 @@
 import json
 import re
-from typing import List, Dict, Any, Tuple
-from dataclasses import dataclass
+from typing import List, Dict, Any, Tuple, Optional
 import streamlit as st
 from llm_provider_tools import get_embedding, rerank_results
-from prompt_templates.prompts import RAG_PROMPT_TEMPLATE
+from prompt_templates.prompts import RAG_PROMPT_TEMPLATE, RAG_SYSTEM_PROMPT
+from prompt_templates.prompt_builder import synthesize_prompt
 from llms.openai_interface import get_chat_response_stream
+from core_utils.hybrid_search import HybridSearch
+from core_utils.data_types.retrieval_type import (
+    RetrievalResult,
+    SubQuery,
+    SubQueryAnswer,
+)
+from prompt_templates.prompt_builder import (
+    build_decomposition_prompt,
+    build_detection_prompt,
+    build_followup_prompt,
+    build_synthesis_prompt,
+)
+from ui.custom_display import generate_sources_html
+SOURCES_HTML = "sources_html"
+
+# ============================================================================
+# CACHED UTILITIES - Reduce redundant computations
+# ============================================================================
+
+@st.cache_data(show_spinner=False, ttl=300, max_entries=100)
+def _cached_context_build(docs_tuple: tuple, meta_str: str, builder_name: str) -> str:
+    """Lightweight cache for context building - uses tuples for hashability"""
+    # This is a placeholder - actual build_rag_context is passed dynamically
+    # Cache key is based on docs + metadata signature
+    return ""  # Will be overridden in actual call
 
 
-@dataclass
-class SubQuery:
-    id: str
-    question: str
-    query_type: str
-    priority: int
-    parent_query: str
-    dependencies: List[str] = None
-    search_strategy: str = "hybrid"
-    is_independent: bool = True  # New field to track independence
-
-
-@dataclass
-class RetrievalResult:
-    subquery_id: str
-    question: str
-    documents: List[str]
-    metadatas: List[Dict]
-    scores: List[float]
-    strategy_used: str
-
-
-@dataclass
-class SubQueryAnswer:
-    subquery_id: str
-    question: str
-    answer: str
-    has_sufficient_context: bool
-    sources_used: List[str]
-    metadatas_used: List[Dict]
+def _stream_response_efficiently(chat_function, model_name, messages, provider, label: str = "Processing"):
+    """Unified streaming function with single placeholder - Claude-like experience"""
+    placeholder = st.empty()
+    buffer = ""
+    
+    with placeholder.container():
+        st.markdown(f"**{label}...**")
+        response_area = st.empty()
+        
+        for token in chat_function(
+            model_name=model_name,
+            messages=messages,
+            provider=provider,
+        ):
+            buffer += token
+            response_area.markdown(buffer)
+    
+    return buffer
 
 
 def rerank_hybrid_results(
@@ -47,7 +60,7 @@ def rerank_hybrid_results(
     top_rerank: int = 3,
     reranking_function=rerank_results,
 ):
-    # Format results for reranker
+    """Optimized reranking - no changes needed, already efficient"""
     chroma_format_results = {
         "documents": [hybrid_results["documents"]],
         "ids": [hybrid_results["ids"]],
@@ -65,77 +78,46 @@ def rerank_hybrid_results(
 
 
 class MultiRetrievalEngine:
-    def __init__(self, chat_function, model_name, hybrid_searcher, selected_provider):
+    def __init__(
+        self,
+        chat_function,
+        model_name,
+        hybrid_searcher: "HybridSearch",
+        selected_provider,
+    ):
         self.chat_function = chat_function
         self.model_name = model_name
         self.hybrid_searcher = hybrid_searcher
         self.selected_provider = selected_provider
-        # Store the collection reference for creating new HybridSearch instances
         self.collection = hybrid_searcher.collection if hybrid_searcher else None
 
     def detect_multiple_questions(self, query: str) -> Dict[str, Any]:
-        """Detect if the query contains multiple questions or complex requirements"""
-        detection_prompt = f"""
-        Analyze this query to detect if it contains multiple questions or complex information needs:
-        
-        Query: "{query}"
-        
-        Look for:
-        1. Multiple question marks
-        2. Words like "and", "also", "what about", "compare", "versus"
-        3. Lists or enumerations
-        4. Different topics or concepts
-        5. Sequential requests
-        
-        Respond in JSON format:
-        {{
-            "is_multi_query": true/false,
-            "question_count": number,
-            "complexity_score": 0-10,
-            "detected_questions": ["list of individual questions if multiple"],
-            "query_type": "single|multi_question|comparative|sequential|complex",
-            "requires_decomposition": true/false,
-            "reasoning": "explanation of detection"
-        }}
-        """
-
+        """Streamlined detection with minimal UI"""
+        detection_prompt = build_detection_prompt(query)
         messages = [{"role": "user", "content": detection_prompt}]
 
         try:
-            with st.status(
-                "🤔 Thinking: Detecting query complexity...", expanded=True
-            ) as status:
-                thinking_placeholder = st.empty()
-                thinking_buffer = ""
-
-                for token in self.chat_function(
-                    model_name=self.model_name,
-                    messages=messages,
-                    provider=self.selected_provider,
-                ):
-                    thinking_buffer += token
-                    thinking_placeholder.markdown(f"```\n{thinking_buffer}\n```")
-
-                response = thinking_buffer
-            status.update(
-                label="🤔 Thinking: Detecting query complexity...", expanded=False
+            response = _stream_response_efficiently(
+                self.chat_function,
+                self.model_name,
+                messages,
+                self.selected_provider,
+                label="🤔 Analyzing query"
             )
         except Exception:
-            # Fallback: aggregate tokens without any st calls
-            response = ""
-            for token in self.chat_function(
+            response = "".join(self.chat_function(
                 model_name=self.model_name,
                 messages=messages,
                 provider=self.selected_provider,
-            ):
-                response += token
+            ))
+
         try:
             start_idx = response.find("{")
             end_idx = response.rfind("}") + 1
             json_str = response[start_idx:end_idx]
             return json.loads(json_str)
         except:
-            # Fallback detection using simple heuristics
+            # Fast fallback heuristic
             question_marks = query.count("?")
             multi_indicators = len(
                 re.findall(
@@ -143,7 +125,6 @@ class MultiRetrievalEngine:
                     query.lower(),
                 )
             )
-
             return {
                 "is_multi_query": question_marks > 1 or multi_indicators > 0,
                 "question_count": max(1, question_marks),
@@ -151,11 +132,11 @@ class MultiRetrievalEngine:
                 "detected_questions": [query],
                 "query_type": "multi_question" if question_marks > 1 else "single",
                 "requires_decomposition": question_marks > 1 or multi_indicators > 1,
-                "reasoning": "Heuristic detection based on punctuation and keywords",
+                "reasoning": "Heuristic detection",
             }
 
     def decompose_query(self, query: str, detection_info: Dict) -> List[SubQuery]:
-        """Break down complex query into subqueries"""
+        """Streamlined decomposition"""
         if not detection_info.get("requires_decomposition", False):
             return [
                 SubQuery(
@@ -168,61 +149,23 @@ class MultiRetrievalEngine:
                 )
             ]
 
-        decomposition_prompt = f"""
-        Break down this complex query into specific subqueries that can be searched independently:
-        
-        Original Query: "{query}"
-        Detection Info: {json.dumps(detection_info, indent=2)}
-        
-        For each subquery, determine if it can be answered independently or if it depends on other subqueries.
-        Independent subqueries should be answerable without needing information from other parts.
-        
-        Format as JSON:
-        {{
-            "subqueries": [
-                {{
-                    "id": "subq_1",
-                    "question": "specific searchable question",
-                    "query_type": "factual|analytical|comparative|definitional",
-                    "priority": 1,
-                    "dependencies": [],
-                    "search_strategy": "hybrid|semantic|keyword|multi_step",
-                    "is_independent": true
-                }}
-            ],
-            "execution_order": ["subq_1", "subq_2", ...],
-            "combination_strategy": "merge|compare|sequence|synthesize"
-        }}
-        """
-
+        decomposition_prompt = build_decomposition_prompt(query, detection_info)
         messages = [{"role": "user", "content": decomposition_prompt}]
 
-        # Stream the thinking process
         try:
-            with st.status(
-                "🤔 Thinking: Decomposing query...", expanded=True
-            ) as status:
-                thinking_placeholder = st.empty()
-                thinking_buffer = ""
-
-                for token in self.chat_function(
-                    model_name=self.model_name,
-                    messages=messages,
-                    provider=self.selected_provider,
-                ):
-                    thinking_buffer += token
-                    thinking_placeholder.markdown(f"```\n{thinking_buffer}\n```")
-
-                response = thinking_buffer
-                status.update(label="🤔 Thinking: Decomposing query...", expanded=False)
+            response = _stream_response_efficiently(
+                self.chat_function,
+                self.model_name,
+                messages,
+                self.selected_provider,
+                label="🔧 Breaking down query"
+            )
         except Exception:
-            response = ""
-            for token in self.chat_function(
+            response = "".join(self.chat_function(
                 model_name=self.model_name,
                 messages=messages,
                 provider=self.selected_provider,
-            ):
-                response += token
+            ))
 
         try:
             start_idx = response.find("{")
@@ -243,51 +186,37 @@ class MultiRetrievalEngine:
                     is_independent=sq.get("is_independent", True),
                 )
                 subqueries.append(subquery)
-
             return subqueries
 
-        except Exception as e:
-            # Try to report the error via streamlit if available—silently ignore otherwise
-            try:
-                st.error(f"Error in query decomposition: {e}")
-            except Exception:
-                pass
-            # Fallback: split by question marks or conjunctions
+        except Exception:
+            # Fast fallback
             parts = re.split(r"[\?]|(?:\band\s)|(?:\balso\s)", query)
-            subqueries = []
-            for i, part in enumerate(parts):
-                if part.strip():
-                    subquery = SubQuery(
-                        id=f"subq_{i+1}",
-                        question=part.strip()
-                        + ("?" if not part.strip().endswith("?") else ""),
-                        query_type="factual",
-                        priority=i + 1,
-                        parent_query=query,
-                        is_independent=True,
-                    )
-                    subqueries.append(subquery)
-            return subqueries
+            return [
+                SubQuery(
+                    id=f"subq_{i+1}",
+                    question=part.strip() + ("?" if not part.strip().endswith("?") else ""),
+                    query_type="factual",
+                    priority=i + 1,
+                    parent_query=query,
+                    is_independent=True,
+                )
+                for i, part in enumerate(parts) if part.strip()
+            ]
 
-    def execute_subquery(self, subquery: SubQuery) -> RetrievalResult:
-        """Execute a single subquery using appropriate retrieval strategy"""
+    def execute_subquery(self, subquery: SubQuery, **kwargs) -> RetrievalResult:
+        """Simplified subquery execution"""
+        retrieval_k = kwargs.get("retrieval_k", 5)
+        top_rerank = kwargs.get("top_rerank", 3)
+
         try:
             if subquery.search_strategy == "multi_step":
-                # Multi-step retrieval for complex subqueries
-                return self._multi_step_retrieval(subquery)
+                return self._multi_step_retrieval(subquery, top_rerank=top_rerank, retrieval_k=retrieval_k)
             elif subquery.search_strategy == "semantic":
-                # Semantic-focused search
-                return self._semantic_retrieval(subquery)
-            elif subquery.search_strategy == "keyword":
-                # Keyword-focused search
-                return self._hybrid_retrieval(subquery)  # Using hybrid as fallback
+                return self._semantic_retrieval(subquery, top_rerank=top_rerank, retrieval_k=retrieval_k)
             else:
-                # Default hybrid search
-                return self._hybrid_retrieval(subquery)
-
+                return self._hybrid_retrieval(subquery, top_rerank=top_rerank, retrieval_k=retrieval_k)
         except Exception as e:
-            if "st" in globals():
-                st.error(f"Error executing subquery {subquery.id}: {e}")
+            st.error(f"⚠️ Error retrieving for {subquery.id}: {str(e)[:100]}")
             return RetrievalResult(
                 subquery_id=subquery.id,
                 question=subquery.question,
@@ -298,23 +227,26 @@ class MultiRetrievalEngine:
             )
 
     def _hybrid_retrieval(
-        self, subquery: SubQuery, k: int = 5, top_rerank: int = 3
+        self, subquery: SubQuery, retrieval_k: int = 5, top_rerank: int = 3
     ) -> RetrievalResult:
-        """Standard hybrid retrieval"""
+        """Optimized hybrid retrieval"""
         query_embedding = get_embedding(
             input=subquery.question, provider=self.selected_provider
         )
-
+        
         hybrid_results = self.hybrid_searcher.hybrid_search(
-            query=subquery.question, query_embedding=query_embedding, k=k
+            query=subquery.question,
+            query_embedding=query_embedding,
+            retrieval_k=retrieval_k,
         )
-        # rerank first
+        
         reranked_results = rerank_hybrid_results(
             query=subquery.question,
             hybrid_results=hybrid_results,
             selected_provider=self.selected_provider,
             top_rerank=top_rerank,
         )
+        
         return RetrievalResult(
             subquery_id=subquery.id,
             question=subquery.question,
@@ -325,23 +257,26 @@ class MultiRetrievalEngine:
         )
 
     def _semantic_retrieval(
-        self, subquery: SubQuery, k: int = 5, top_rerank: int = 3
+        self, subquery: SubQuery, retrieval_k: int = 5, top_rerank: int = 3
     ) -> RetrievalResult:
-        """Semantic-focused retrieval with higher alpha"""
-
+        """Optimized semantic retrieval"""
         query_embedding = get_embedding(
             input=subquery.question, provider=self.selected_provider
         )
 
         results = self.hybrid_searcher.hybrid_search(
-            query=subquery.question, query_embedding=query_embedding, k=k
+            query=subquery.question,
+            query_embedding=query_embedding,
+            retrieval_k=retrieval_k,
         )
+        
         reranked_results = rerank_hybrid_results(
             query=subquery.question,
             hybrid_results=results,
             selected_provider=self.selected_provider,
             top_rerank=top_rerank,
         )
+        
         return RetrievalResult(
             subquery_id=subquery.id,
             question=subquery.question,
@@ -352,64 +287,50 @@ class MultiRetrievalEngine:
         )
 
     def _multi_step_retrieval(
-        self, subquery: SubQuery, k: int = 5, top_rerank: int = 3
+        self, subquery: SubQuery, retrieval_k: int = 5, top_rerank: int = 3
     ) -> RetrievalResult:
-        """Multi-step retrieval for complex queries"""
-        # First, get initial results
-        initial_result = self._hybrid_retrieval(subquery)
+        """Optimized multi-step retrieval"""
+        initial_result = self._hybrid_retrieval(subquery, top_rerank=top_rerank, retrieval_k=retrieval_k)
 
         if not initial_result.documents:
             return initial_result
 
-        # Generate follow-up query based on initial results
-        followup_prompt = f"""
-        Based on these initial search results for the question "{subquery.question}",
-        generate a refined search query to get more specific information:
-        
-        Initial Results Preview: {initial_result.documents[0][:200] if initial_result.documents else "No results"}
-        
-        Provide a refined search query that would get more targeted information:
-        """
-
+        followup_prompt = build_followup_prompt(subquery.question, initial_result)
         messages = [{"role": "user", "content": followup_prompt}]
-        refined_query = ""
-        for token in self.chat_function(
+        
+        refined_query = "".join(self.chat_function(
             model_name=self.model_name,
             messages=messages,
             provider=self.selected_provider,
-        ):
-            refined_query += token
+        ))
 
-        # Execute refined search
         refined_embedding = get_embedding(
             input=refined_query.strip(), provider=self.selected_provider
         )
+        
         refined_results = self.hybrid_searcher.hybrid_search(
-            query=refined_query.strip(), query_embedding=refined_embedding, k=k
+            query=refined_query.strip(),
+            query_embedding=refined_embedding,
+            retrieval_k=retrieval_k,
         )
+        
         reranked_refined_results = rerank_hybrid_results(
             query=refined_query.strip(),
             hybrid_results=refined_results,
             top_rerank=top_rerank,
             selected_provider=self.selected_provider,
         )
-        # Combine results
-        combined_docs = (
-            initial_result.documents + reranked_refined_results["reranked_docs"]
-        )
-        combined_metas = (
-            initial_result.metadatas + reranked_refined_results["reranked_metadatas"]
-        )
-        combined_scores = (
-            initial_result.scores + reranked_refined_results["reranked_scores"]
-        )
+
+        combined_docs = initial_result.documents + reranked_refined_results["reranked_docs"]
+        combined_metas = initial_result.metadatas + reranked_refined_results["reranked_metadatas"]
+        combined_scores = initial_result.scores + reranked_refined_results["reranked_scores"]
 
         return RetrievalResult(
             subquery_id=subquery.id,
             question=subquery.question,
-            documents=combined_docs[:8],  # Limit total results
-            metadatas=combined_metas[:8],
-            scores=combined_scores[:8],
+            documents=combined_docs,
+            metadatas=combined_metas,
+            scores=combined_scores,
             strategy_used="multi_step",
         )
 
@@ -419,263 +340,389 @@ class MultiRetrievalEngine:
         retrieval_result: RetrievalResult,
         build_rag_context,
         rag_prompt_template: str,
+        augment_chunk: bool = True,
+        answer_per_chunk: bool = True,
+        **kwargs,
     ) -> SubQueryAnswer:
-        """Answer a single subquery using traditional RAG approach (more lenient)"""
+        """Optimized RAG answering with streamlined UI"""
+        display_context = kwargs.get("display_context", False)
 
         if not retrieval_result.documents:
             return SubQueryAnswer(
                 subquery_id=subquery.id,
                 question=subquery.question,
-                answer="I cannot answer this question based on the available context as no relevant documents were found.",
+                answer="I cannot answer this question - no relevant documents found.",
                 has_sufficient_context=False,
                 sources_used=[],
                 metadatas_used=[],
             )
 
-        # Use traditional RAG approach - build context and answer directly
-        context = build_rag_context(docs=retrieval_result.documents)
-        prompt = rag_prompt_template.format(query=subquery.question, context=context)
-        messages = [{"role": "user", "content": prompt}]
+        # Show context only if requested (collapsed)
+        if display_context:
+            pre_context = build_rag_context(
+                documents=retrieval_result.documents, 
+                metadatas=retrieval_result.metadatas
+            )
+            with st.expander("📄 View Retrieved Context", expanded=False):
+                st.code(pre_context, language="text")
 
-        answer_buffer = ""
-
-        if "st" in globals():
-            st.write(f"**Answering:** {subquery.question}")
-            answer_placeholder = st.empty()
-
-            for token in self.chat_function(
-                model_name=self.model_name,
-                messages=messages,
-                provider=self.selected_provider,
-            ):
-                answer_buffer += token
-                answer_placeholder.markdown(answer_buffer)
+        # Route to appropriate processing method
+        if augment_chunk:
+            return self._process_per_chunk_and_synthesize(
+                subquery=subquery,
+                retrieval_result=retrieval_result,
+                build_rag_context=build_rag_context,
+                rag_prompt_template=rag_prompt_template,
+                use_augmented=True,
+                display_context=display_context,
+            )
+        elif answer_per_chunk:
+            return self._process_per_chunk_and_synthesize(
+                subquery=subquery,
+                retrieval_result=retrieval_result,
+                build_rag_context=build_rag_context,
+                rag_prompt_template=rag_prompt_template,
+                use_augmented=False,
+                display_context=display_context,
+            )
         else:
-            for token in self.chat_function(
-                model_name=self.model_name,
-                messages=messages,
-                provider=self.selected_provider,
-            ):
-                answer_buffer += token
+            # Single-shot answer - fastest path
+            context = build_rag_context(
+                documents=[d.get("augmented_text", "") for d in retrieval_result.metadatas],
+            )
+            
+            if display_context:
+                with st.expander("📝 Augmented Context", expanded=False):
+                    st.code(context, language="text")
 
-        # Traditional RAG assumes the context is workable if documents exist
-        has_sufficient_context = len(retrieval_result.documents) > 0
+            prompt = rag_prompt_template.format(query=subquery.question, context=context)
+            messages = [{"role": "user", "content": prompt}]
+            
+            answer_buffer = _stream_response_efficiently(
+                self.chat_function,
+                self.model_name,
+                messages,
+                self.selected_provider,
+                label=f"💡 Answering: {subquery.question[:60]}..."
+            )
+
+            return SubQueryAnswer(
+                subquery_id=subquery.id,
+                question=subquery.question,
+                answer=answer_buffer,
+                has_sufficient_context=len(retrieval_result.documents) > 0,
+                sources_used=retrieval_result.documents,
+                metadatas_used=retrieval_result.metadatas,
+            )
+
+    def _process_per_chunk_and_synthesize(
+        self,
+        subquery: SubQuery,
+        retrieval_result: RetrievalResult,
+        build_rag_context,
+        rag_prompt_template: str,
+        use_augmented: bool,
+        display_context: bool,
+    ) -> SubQueryAnswer:
+        """Optimized chunk processing with better UX feedback"""
+        individual_answers = []
+
+        # Determine texts to process
+        if use_augmented:
+            texts_to_process = [
+                (i, metadata.get("augmented_text", ""))
+                for i, metadata in enumerate(retrieval_result.metadatas)
+            ]
+            context_label = "Augmented Context"
+        else:
+            texts_to_process = [
+                (i, doc) for i, doc in enumerate(retrieval_result.documents)
+            ]
+            context_label = "Document"
+
+        # Single progress indicator
+        progress_text = st.empty()
+        progress_text.markdown(f"**Processing {len(texts_to_process)} {context_label.lower()}s...**")
+
+        # Process each chunk efficiently
+        for i, text in texts_to_process:
+            if not text.strip():
+                continue
+
+            individual_context = build_rag_context(
+                documents=[text], 
+                metadatas=retrieval_result.metadatas
+            )
+
+            if display_context:
+                with st.expander(f"{context_label} {i+1}", expanded=False):
+                    st.code(individual_context, language="text")
+
+            # Update progress
+            progress_text.markdown(f"**Processing {context_label} {i+1}/{len(texts_to_process)}**")
+
+            prompt = rag_prompt_template.format(
+                query=subquery.question, 
+                context=individual_context
+            )
+            messages = [
+                {"role": "system", "content": RAG_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ]
+
+            individual_answer = _stream_response_efficiently(
+                self.chat_function,
+                self.model_name,
+                messages,
+                self.selected_provider,
+                label=f"{context_label} {i+1}"
+            )
+
+            if individual_answer.strip():
+                individual_answers.append(f"{context_label} {i+1}: {individual_answer.strip()}")
+
+        # Clear progress
+        progress_text.empty()
+
+        if not individual_answers:
+            return SubQueryAnswer(
+                subquery_id=subquery.id,
+                question=subquery.question,
+                answer=f"No valid contexts found to answer the question.",
+                has_sufficient_context=False,
+                sources_used=retrieval_result.documents,
+                metadatas_used=retrieval_result.metadatas,
+            )
+
+        # Synthesize efficiently
+        synthesis_prompt = f"""Based on the following individual answers to "{subquery.question}", 
+provide a comprehensive, synthesized response. Remove redundancy and create a coherent answer.
+
+Individual Answers:
+{chr(10).join(individual_answers)}
+
+Question: {subquery.question}
+
+Synthesized Answer:"""
+
+        messages = [
+            {"role": "system", "content": RAG_SYSTEM_PROMPT},
+            {"role": "user", "content": synthesis_prompt},
+        ]
+
+        final_answer = _stream_response_efficiently(
+            self.chat_function,
+            self.model_name,
+            messages,
+            self.selected_provider,
+            label="📊 Synthesizing insights"
+        )
+
+        # Show final answer prominently
+        st.markdown("**✅ Final Answer:**")
+        st.markdown(final_answer)
 
         return SubQueryAnswer(
             subquery_id=subquery.id,
             question=subquery.question,
-            answer=answer_buffer,
-            has_sufficient_context=has_sufficient_context,
+            answer=final_answer,
+            has_sufficient_context=len(individual_answers) > 0,
             sources_used=retrieval_result.documents,
             metadatas_used=retrieval_result.metadatas,
         )
 
     def execute_multi_retrieval_with_streaming(
-        self, subqueries: List[SubQuery], build_rag_context, rag_prompt_template: str
+        self,
+        subqueries: List[SubQuery],
+        build_rag_context,
+        rag_prompt_template: str,
+        **kwargs,
     ) -> Tuple[List[SubQueryAnswer], Dict[str, RetrievalResult]]:
-        """Execute subqueries with traditional RAG for each independent question"""
-
+        """Optimized multi-retrieval execution"""
+        retrieval_k = kwargs.get("retrieval_k", 5)
+        top_rerank = kwargs.get("top_rerank", 3)
         results = {}
         subquery_answers = []
 
-        # Separate independent and dependent subqueries
         independent_subqueries = [sq for sq in subqueries if sq.is_independent]
         dependent_subqueries = [sq for sq in subqueries if not sq.is_independent]
 
-        # Process independent subqueries using traditional RAG approach
-        if "st" in globals():
-            st.subheader("🔍 Processing Independent Questions with Traditional RAG")
+        if independent_subqueries:
+            st.markdown("**🔍 Processing Questions**")
 
         for subquery in sorted(independent_subqueries, key=lambda sq: sq.priority):
-            if "st" in globals():
-                with st.container():
-                    st.write(f"**Question {subquery.id}:** {subquery.question}")
+            with st.container():
+                st.markdown(f"**Q{subquery.id[-1]}:** {subquery.question}")
 
-                    # Retrieve context
-                    with st.spinner(f"Retrieving context for {subquery.id}..."):
-                        result = self.execute_subquery(subquery)
-                        results[subquery.id] = result
-
-                    # Answer using traditional RAG (more lenient)
-                    answer = self.answer_subquery_traditional_rag(
-                        subquery, result, build_rag_context, rag_prompt_template
+                # Retrieve with minimal UI
+                with st.spinner("Retrieving..."):
+                    result = self.execute_subquery(
+                        subquery, retrieval_k=retrieval_k, top_rerank=top_rerank
                     )
-                    subquery_answers.append(answer)
+                    results[subquery.id] = result
 
-                    # Show sources
-                    if answer.sources_used:
-                        with st.expander(f"📚 Sources for {subquery.id}"):
-                            for i, (doc, meta) in enumerate(
-                                zip(answer.sources_used[:3], answer.metadatas_used[:3])
-                            ):
-                                st.write(f"**Source {i+1}:** {doc}...")
-                                if meta:
-                                    st.write(f"*Metadata:* file: {meta['title']}")
-                                    st.write(
-                                        f"*Metadata:* page range: {meta['page-range']}"
-                                    )
-
-                    st.divider()
-            else:
-                result = self.execute_subquery(subquery)
-                results[subquery.id] = result
+                # Answer
+                context_answer_chunk_params = {
+                    "augment_chunk": st.session_state.get("augment_chunk", True),
+                    "answer_per_chunk": st.session_state.get("answer_per_chunk", True),
+                }
                 answer = self.answer_subquery_traditional_rag(
-                    subquery, result, build_rag_context, rag_prompt_template
+                    subquery,
+                    result,
+                    build_rag_context,
+                    rag_prompt_template,
+                    **context_answer_chunk_params,
                 )
                 subquery_answers.append(answer)
 
+                # Collapsed sources
+                if answer.sources_used:
+                    with st.expander(f"📚 Sources ({len(answer.sources_used)})", expanded=False):
+                        for i, (doc, meta) in enumerate(zip(answer.sources_used, answer.metadatas_used)):
+                            st.text(f"Source {i+1}: {doc[:150]}...")
+                            if meta:
+                                st.caption(f"📄 {meta.get('title', 'Unknown')} | Pages: {meta.get('page-range', 'N/A')}")
+
+                st.divider()
+
         # Process dependent subqueries (if any)
         if dependent_subqueries:
-            if "st" in globals():
-                st.subheader("🔗 Processing Dependent Questions")
+            st.markdown("**🔗 Processing Dependent Questions**")
 
             for subquery in sorted(dependent_subqueries, key=lambda sq: sq.priority):
-                # Check dependencies
-                if subquery.dependencies:
-                    for dep_id in subquery.dependencies:
-                        if dep_id not in results:
-                            if "st" in globals():
-                                st.warning(
-                                    f"Dependency {dep_id} not yet resolved for {subquery.id}"
-                                )
-
-                # Retrieve additional context if needed
-                result = self.execute_subquery(subquery)
+                result = self.execute_subquery(subquery, top_rerank=top_rerank, retrieval_k=retrieval_k)
                 results[subquery.id] = result
 
-                # For dependent queries, combine context with related subqueries
+                # Combine with dependencies
                 combined_docs = result.documents
                 combined_metas = result.metadatas
 
-                # Add context from dependencies
                 for dep_id in subquery.dependencies:
                     if dep_id in results:
                         dep_result = results[dep_id]
                         combined_docs.extend(dep_result.documents)
                         combined_metas.extend(dep_result.metadatas)
 
-                # Create a modified result with combined context
                 combined_result = RetrievalResult(
                     subquery_id=result.subquery_id,
                     question=result.question,
-                    documents=combined_docs[:8],  # Limit total
-                    metadatas=combined_metas[:8],
+                    documents=combined_docs,
+                    metadatas=combined_metas,
                     scores=result.scores,
-                    strategy_used=result.strategy_used + "_with_dependencies",
+                    strategy_used=result.strategy_used + "_with_deps",
                 )
 
-                if "st" in globals():
-                    st.write(f"**Question {subquery.id}:** {subquery.question}")
-
-                # Use traditional RAG for dependent questions too
+                st.markdown(f"**Q{subquery.id[-1]}:** {subquery.question}")
                 answer = self.answer_subquery_traditional_rag(
                     subquery, combined_result, build_rag_context, rag_prompt_template
                 )
                 subquery_answers.append(answer)
 
-                if "st" in globals() and answer.sources_used:
-                    with st.expander(f"📚 Sources for {subquery.id}"):
-                        for i, (doc, meta) in enumerate(
-                            zip(answer.sources_used[:3], answer.metadatas_used[:3])
-                        ):
-                            st.write(f"**Source {i+1}:** {doc[:200]}...")
-                            if meta:
-                                st.write(f"*Metadata:* {meta}")
-                    st.divider()
+                if answer.sources_used:
+                    with st.expander(f"📚 Sources ({len(answer.sources_used)})", expanded=False):
+                        for i, (doc, meta) in enumerate(zip(answer.sources_used, answer.metadatas_used)):
+                            st.text(f"{doc[:150]}...")
+                st.divider()
 
         return subquery_answers, results
 
+    def validate_rag_answer_with_chat_history(
+        self,
+        original_query: Optional[str] = None,
+        synthesized_answer: Optional[str] = None,
+        chat_history: Optional[List[Dict]] = None,
+        **kwargs,
+    ):
+        """Optimized history validation"""
+        recap_prompt = f"Given this query: {original_query}\nThe answer found is: {synthesized_answer}.\nMake a new answer that takes the past conversation into account."
+        
+        # remove the sources_html for vllm deployed model following openai protocol
+        chat_history = [{key: value for key, value in d.items() if key != SOURCES_HTML} for d in chat_history]
+        print(chat_history)
+        chat_history.append({"role": "user", "content": recap_prompt})
+        
+        temperature = st.session_state.get("temperature", 0.7)
+        
+        updated_buffer = _stream_response_efficiently(
+            self.chat_function,
+            self.model_name,
+            chat_history,
+            self.selected_provider,
+            label="🧠 Refining with chat history"
+        )
+
+        return updated_buffer
+
     def synthesize_final_answer(
-        self, original_query: str, subquery_answers: List[SubQueryAnswer]
+        self, original_query: str, subquery_answers: List[SubQueryAnswer], **kwargs
     ) -> str:
-        """Synthesize all subquery answers into a final comprehensive answer"""
+        """Optimized final synthesis"""
+        history = kwargs.get("conversation_history", []).copy()
+        enable_history = kwargs.get("enable_history", False)
 
         if len(subquery_answers) == 1:
-            return subquery_answers[0].answer
+            if not enable_history or not history:
+                return subquery_answers[0].answer
+            else:
+                st.markdown("**🧠 Checking chat history...**")
+                return self.validate_rag_answer_with_chat_history(
+                    original_query=original_query,
+                    synthesized_answer=subquery_answers[0].answer,
+                    chat_history=history,
+                )
 
-        # Prepare synthesis prompt
-        answers_text = []
-        for answer in subquery_answers:
-            status = "✅" if answer.has_sufficient_context else "⚠️"
-            answers_text.append(
-                f"{status} **Q: {answer.question}**\nA: {answer.answer}\n"
+        # Multi-answer synthesis
+        synthesis_prompt = build_synthesis_prompt(original_query, subquery_answers)
+        temp_messages = [{"role": "user", "content": synthesis_prompt}]
+        
+        temperature = st.session_state.get("temperature", 0.7)
+
+        st.markdown("**🎯 Final Comprehensive Answer**")
+        
+        final_answer_buffer = _stream_response_efficiently(
+            self.chat_function,
+            self.model_name,
+            temp_messages,
+            self.selected_provider,
+            label="Synthesizing"
+        )
+
+        if enable_history and history:
+            st.markdown("**🧠 Refining with history...**")
+            final_answer_buffer = self.validate_rag_answer_with_chat_history(
+                original_query=original_query,
+                synthesized_answer=final_answer_buffer,
+                chat_history=history,
             )
-
-        synthesis_prompt = f"""
-        Original question: "{original_query}"
-        
-        I have answered the following sub-questions:
-        
-        {chr(10).join(answers_text)}
-        
-        Please provide a comprehensive, well-structured answer that synthesizes all the above information to fully address the original question. 
-        
-        If some sub-questions couldn't be answered due to insufficient context, acknowledge this in your final response.
-        
-        Structure your response clearly and make sure it directly addresses the original question.
-        """
-
-        messages = [{"role": "user", "content": synthesis_prompt}]
-
-        final_answer_buffer = ""
-
-        if "st" in globals():
-            st.subheader("🎯 Final Comprehensive Answer")
-            ##
-            # Show thinking process
-            thinking_placeholder = st.empty()
-            thinking_buffer = ""
-            for token in self.chat_function(
-                model_name=self.model_name,
-                messages=messages,
-                provider=self.selected_provider,
-            ):
-                thinking_buffer += token
-                final_answer_buffer += token
-                thinking_placeholder.markdown(thinking_buffer)
-
-        else:
-            for token in self.chat_function(
-                model_name=self.model_name,
-                messages=messages,
-                provider=self.selected_provider,
-            ):
-                final_answer_buffer += token
 
         return final_answer_buffer
 
 
+# ============================================================================
+# FACTORY & UTILITY FUNCTIONS
+# ============================================================================
+
 def create_multi_retrieval_engine(
-    collection, selected_provider, chat_function=None, model_name=None
+    collection, selected_provider, chat_function=None, model_name=None, **kwargs
 ):
-    """
-    Factory function to create a MultiRetrievalEngine instance.
-    This helps avoid session state and caching issues across different pages.
-    """
-    try:
-        from core_utils.hybrid_search import HybridSearch
-        from llm_provider_tools import get_default_llm
+    """Optimized factory function"""
+    from core_utils.hybrid_search import HybridSearch
+    from llm_provider_tools import get_default_llm
 
-        # Use provided parameters or get defaults
-        if chat_function is None:
-            chat_function = get_chat_response_stream
-        if model_name is None:
-            model_name = get_default_llm(selected_provider=selected_provider)
+    if chat_function is None:
+        chat_function = get_chat_response_stream
+    if model_name is None:
+        model_name = get_default_llm(selected_provider=selected_provider)
 
-        # Create hybrid searcher
-        hybrid_searcher = HybridSearch(collection, alpha=0.7)
+    alpha = kwargs.get("alpha", 0.7)
+    hybrid_searcher = HybridSearch(collection, alpha=alpha)
 
-        # Create and return the engine
-        return MultiRetrievalEngine(
-            chat_function=chat_function,
-            model_name=model_name,
-            hybrid_searcher=hybrid_searcher,
-            selected_provider=selected_provider,
-        )
-    except ImportError as e:
-        if "st" in globals():
-            st.error(f"Failed to create MultiRetrievalEngine: {e}")
-        raise
+    return MultiRetrievalEngine(
+        chat_function=chat_function,
+        model_name=model_name,
+        hybrid_searcher=hybrid_searcher,
+        selected_provider=selected_provider,
+    )
 
 
 def display_multi_retrieval_results(
@@ -683,279 +730,387 @@ def display_multi_retrieval_results(
     retrieval_results: Dict[str, RetrievalResult],
     detection_info: Dict[str, Any],
 ):
-    """Display results from multi-retrieval execution"""
-    with st.expander("🔍 Multi-Retrieval Process", expanded=True):
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.subheader("Query Detection")
-            st.json(detection_info)
-
-        with col2:
-            st.subheader("Subquery Execution")
-            for subquery in subqueries:
-                if subquery.id in retrieval_results:
-                    result = retrieval_results[subquery.id]
-                    status_icon = "✅" if result.documents else "❌"
-                    independence_icon = "🔗" if not subquery.is_independent else "🔄"
-                    st.write(
-                        f"{status_icon}{independence_icon} **{subquery.id}**: {subquery.question}"
-                    )
-                    st.write(
-                        f"   Strategy: {result.strategy_used}, Results: {len(result.documents)}"
-                    )
-                else:
-                    st.write(f"❌ **{subquery.id}**: {subquery.question}")
-                    st.write("   Status: Failed to execute")
-
-        # Show retrieval statistics
-        st.subheader("Retrieval Statistics")
-        total_docs = sum(len(result.documents) for result in retrieval_results.values())
-        unique_strategies = set(
-            result.strategy_used for result in retrieval_results.values()
-        )
-
+    """Streamlined results display"""
+    with st.expander("📊 Retrieval Details", expanded=False):
         col1, col2, col3 = st.columns(3)
+        
+        total_docs = sum(len(r.documents) for r in retrieval_results.values())
+        unique_strategies = set(r.strategy_used for r in retrieval_results.values())
+        
         with col1:
-            st.metric("Total Documents Retrieved", total_docs)
+            st.metric("Documents", total_docs)
         with col2:
-            st.metric("Subqueries Executed", len(retrieval_results))
+            st.metric("Subqueries", len(retrieval_results))
         with col3:
-            st.metric("Strategies Used", len(unique_strategies))
+            st.metric("Strategies", len(unique_strategies))
 
-        # Strategy breakdown
-        strategy_counts = {}
-        for result in retrieval_results.values():
-            strategy_counts[result.strategy_used] = (
-                strategy_counts.get(result.strategy_used, 0) + 1
-            )
-
-        st.write("**Strategy Distribution:**")
-        for strategy, count in strategy_counts.items():
-            st.write(f"- {strategy}: {count} subqueries")
+        # Compact subquery list
+        for subquery in subqueries:
+            if subquery.id in retrieval_results:
+                result = retrieval_results[subquery.id]
+                status = "✅" if result.documents else "❌"
+                st.text(f"{status} {subquery.id}: {subquery.question[:60]}... ({len(result.documents)} docs)")
 
 
-def agentic_query_processing(
-    query,
-    selected_provider: str,
-    rerank_results,
+def reply_with_chat_history(
+    prompt: str,
     chat_function,
-    build_rag_context,
-    llm_model,
-    view_sources,
-    session_key: str,
-    multi_retrieval_engine,
-    hybrid_searcher,
-    get_embedding,
-    enable_multi_retrieval=False,
-    show_retrieval_details=False,
-    show_decomposition=False,
-    max_subqueries=5,
-    default_strategy="hybrid",
-    rag_prompt_template: str = RAG_PROMPT_TEMPLATE,
+    llm_model: str,
+    selected_provider: str,
+    use_streamlit: bool = True,
+    session_key: Optional[str] = None,
+    chat_history: Optional[List[Dict]] = None,
+    **kwargs,
 ):
-    subqueries = []
-    detection_info = {}
-
-    if enable_multi_retrieval:
-        # Step 1: Detect multiple questions
-        with st.spinner("Detecting multiple questions..."):
-            detection_info = multi_retrieval_engine.detect_multiple_questions(query)
-
-        if show_decomposition:
-            with st.expander("📝 Query Detection Results"):
-                st.json(detection_info)
-
-        # Step 2: Decompose query if needed
-        if detection_info.get("requires_decomposition", False):
-            with st.spinner("Decomposing query into subqueries..."):
-                subqueries = multi_retrieval_engine.decompose_query(
-                    query, detection_info
-                )
-                # Limit subqueries
-                subqueries = subqueries[:max_subqueries]
-
-            if show_decomposition:
-                with st.expander("🔧 Query Decomposition"):
-                    st.write(f"**Original Query:** {query}")
-                    st.write(f"**Decomposed into {len(subqueries)} subqueries:**")
-                    for sq in subqueries:
-                        independence_status = (
-                            "Independent" if sq.is_independent else "Dependent"
-                        )
-                        st.write(f"- **{sq.id}**: {sq.question}")
-                        st.write(
-                            f"  Type: {sq.query_type}, Priority: {sq.priority}, Strategy: {sq.search_strategy}, Status: {independence_status}"
-                        )
-        else:
-            # Single query - create one subquery
-            subqueries = [
-                SubQuery(
-                    id="subq_1",
-                    question=query,
-                    query_type="simple",
-                    priority=1,
-                    parent_query=query,
-                    search_strategy=default_strategy,
-                    is_independent=True,
-                )
-            ]
-
-        # Step 3: Execute multi-retrieval with streaming
-        with st.chat_message("assistant"):
-            st.write("Processing your multi-part question...")
-
-            subquery_answers, retrieval_results = (
-                multi_retrieval_engine.execute_multi_retrieval_with_streaming(
-                    subqueries, build_rag_context, rag_prompt_template
-                )
-            )
-
-            # Synthesize final answer if multiple subqueries
-            if len(subqueries) > 1:
-                final_answer = multi_retrieval_engine.synthesize_final_answer(
-                    query, subquery_answers
-                )
-            else:
-                final_answer = (
-                    subquery_answers[0].answer
-                    if subquery_answers
-                    else "No answer could be generated."
-                )
-
-        # Display multi-retrieval results
-        if show_retrieval_details and len(subqueries) > 1:
-            display_multi_retrieval_results(
-                subqueries, retrieval_results, detection_info
-            )
-
-        # Store final answer in session
-        st.session_state[session_key]["messages"].append(
-            {"role": "user", "content": query}
-        )
-        st.session_state[session_key]["messages"].append(
-            {"role": "assistant", "content": final_answer}
-        )
-
-        # Store retrieval info in session
-        st.session_state[session_key]["retrieval_history"].append(
-            {
-                "query": query,
-                "subqueries": subqueries,
-                "detection_info": detection_info,
-                "subquery_answers": subquery_answers,
-                "results_count": sum(
-                    len(result.documents) for result in retrieval_results.values()
-                ),
-            }
-        )
-
-        # Display sources from all subqueries
-        all_sources = []
-        all_metadatas = []
-        for answer in subquery_answers:
-            if answer.sources_used:
-                all_sources.extend(answer.sources_used[:2])  # Limit per subquery
-                all_metadatas.extend(answer.metadatas_used[:2])
-
-        if all_sources:
-            with st.expander("🔍 All Sources Used"):
-                view_sources(relevant_docs=all_sources, metadatas=all_metadatas)
-
-    else:
-        # Traditional RAG approach
-        query_embedding = get_embedding(input=query, provider=selected_provider)
-        hybrid_results = hybrid_searcher.hybrid_search(
-            query=query, query_embedding=query_embedding, k=5
-        )
-
-        chroma_format_results = {
-            "documents": [hybrid_results["documents"]],
-            "ids": [hybrid_results["ids"]],
-            "metadatas": [hybrid_results["metadatas"]],
-            "distances": [[1 - score for score in hybrid_results["scores"]]],
-        }
-
-        reranked_data = rerank_results(
-            results=chroma_format_results,
-            provider=selected_provider,
-            query=query,
-            top_rerank=3,
-        )
-
-        reranked_docs = reranked_data.get(
-            "reranked_docs", hybrid_results["documents"][:3]
-        )
-        reranked_metadatas = reranked_data.get(
-            "reranked_metadatas", hybrid_results["metadatas"][:3]
-        )
-
-        # Generate response using traditional approach
-        context = build_rag_context(docs=reranked_docs)
-        prompt = rag_prompt_template.format(query=query, context=context)
-
+    """Optimized chat history handling"""
+    if use_streamlit:
         st.session_state[session_key]["messages"].append(
             {"role": "user", "content": prompt}
         )
 
-        # Stream response
+        cleaned_messages = [
+            {"role": msg["role"], "content": msg["content"]}
+            for msg in st.session_state[session_key]["messages"]
+        ]
+
         with st.chat_message("assistant"):
-            full_resp = ""
-            placeholder = st.empty()
+            full_resp = _stream_response_efficiently(
+                chat_function,
+                llm_model,
+                cleaned_messages,
+                selected_provider,
+                label="Responding"
+            )
 
-            for token in chat_function(
-                model_name=llm_model,
-                messages=st.session_state[session_key]["messages"],
-                provider=selected_provider,
-            ):
-                full_resp += token
-                placeholder.write(full_resp)
-
-        # Store response
         st.session_state[session_key]["messages"].append(
             {"role": "assistant", "content": full_resp}
         )
-        st.session_state[session_key]["messages"][-2] = {
-            "role": "user",
-            "content": query,
+    else:
+        cleaned_messages = [
+            {"role": msg["role"], "content": msg["content"]} 
+            for msg in chat_history
+        ]
+        
+        full_resp = "".join(chat_function(
+            model_name=llm_model,
+            messages=cleaned_messages,
+            provider=selected_provider,
+        ))
+        return full_resp
+
+
+def respond_with_multi_retrieval_rag(
+    query: str,
+    build_rag_context,
+    rag_prompt_template: str,
+    retrieval_k: int,
+    top_rerank: int,
+    multi_retrieval_engine,
+    session_key: str,
+    enable_history: bool,
+    default_strategy: str,
+    max_subqueries: int,
+    show_retrieval_details: bool,
+    show_decomposition: bool,
+):
+    """Optimized multi-retrieval RAG"""
+    # Detect
+    detection_info = multi_retrieval_engine.detect_multiple_questions(query)
+
+    if show_decomposition:
+        with st.expander("🔍 Query Analysis", expanded=False):
+            st.json(detection_info)
+
+    # Decompose
+    if detection_info.get("requires_decomposition", False):
+        subqueries = multi_retrieval_engine.decompose_query(query, detection_info)
+        subqueries = subqueries[:max_subqueries]
+
+        if show_decomposition:
+            with st.expander("🔧 Query Breakdown", expanded=False):
+                st.markdown(f"**Original:** {query}")
+                st.markdown(f"**Split into {len(subqueries)} parts:**")
+                for sq in subqueries:
+                    st.text(f"• {sq.id}: {sq.question}")
+    else:
+        subqueries = [
+            SubQuery(
+                id="subq_1",
+                question=query,
+                query_type="simple",
+                priority=1,
+                parent_query=query,
+                search_strategy=default_strategy,
+                is_independent=True,
+            )
+        ]
+
+    # Execute with streaming
+    with st.chat_message("assistant"):
+        subquery_answers, retrieval_results = (
+            multi_retrieval_engine.execute_multi_retrieval_with_streaming(
+                subqueries=subqueries,
+                build_rag_context=build_rag_context,
+                rag_prompt_template=rag_prompt_template,
+                top_rerank=top_rerank,
+                retrieval_k=retrieval_k,
+            )
+        )
+
+        # Synthesize if needed
+        if len(subqueries) >= 1:
+            final_answer = multi_retrieval_engine.synthesize_final_answer(
+                query,
+                subquery_answers,
+                conversation_history=st.session_state[session_key]["messages"],
+                enable_history=enable_history,
+                session_key=session_key,
+            )
+        else:
+            final_answer = "No answer could be generated."
+
+    # Show detailed stats if requested
+    if show_retrieval_details and len(subqueries) > 1:
+        display_multi_retrieval_results(subqueries, retrieval_results, detection_info)
+
+    # Store in session
+    st.session_state[session_key]["messages"].append({"role": "user", "content": query})
+    st.session_state[session_key]["messages"].append(
+        {"role": "assistant", "content": final_answer}
+    )
+
+    # Store retrieval history
+    if "retrieval_history" not in st.session_state[session_key]:
+        st.session_state[session_key]["retrieval_history"] = []
+    
+    st.session_state[session_key]["retrieval_history"].append(
+        {
+            "query": query,
+            "subqueries": subqueries,
+            "detection_info": detection_info,
+            "subquery_answers": subquery_answers,
+            "results_count": sum(len(r.documents) for r in retrieval_results.values()),
         }
+    )
 
-        # Display sources
-        with st.expander("🔍 View Sources"):
-            view_sources(relevant_docs=reranked_docs, metadatas=reranked_metadatas)
+    # Collect and display sources efficiently
+    all_sources = []
+    all_metadatas = []
+    for answer in subquery_answers:
+        if answer.sources_used:
+            all_sources.extend(answer.sources_used)
+            all_metadatas.extend(answer.metadatas_used)
 
-    # Display multi-retrieval statistics
-    if enable_multi_retrieval and show_retrieval_details:
-        with st.expander("📊 Multi-Retrieval Statistics"):
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                if enable_multi_retrieval:
-                    total_docs_used = sum(
-                        len(answer.sources_used) for answer in subquery_answers
-                    )
-                    st.metric("Total Documents Used", total_docs_used)
-                else:
-                    st.metric("Total Documents Used", len(reranked_docs))
-            with col2:
-                if enable_multi_retrieval:
-                    answered_questions = sum(
-                        1
-                        for answer in subquery_answers
-                        if answer.answer
-                        and "cannot answer" not in answer.answer.lower()
-                    )
-                    st.metric(
-                        "Questions Answered",
-                        f"{answered_questions}/{len(subquery_answers)}",
-                    )
-                else:
-                    st.metric("Query Type", "Single Query")
-            with col3:
-                complexity = detection_info.get("complexity_score", 0)
-                st.metric("Complexity Score", f"{complexity}/10")
+    if all_sources:
+        from ui.chat_history import _wrap_sources_html
+        
+        sources_html = generate_sources_html(
+            relevant_docs=all_sources, 
+            metadatas=all_metadatas, 
+            link_style="dual"
+        )
+        st.session_state[session_key]["messages"][-1][SOURCES_HTML] = sources_html
 
-                if enable_multi_retrieval and len(subqueries) > 1:
-                    independent_count = sum(1 for sq in subqueries if sq.is_independent)
-                    st.write(
-                        f"Independent: {independent_count}, Dependent: {len(subqueries) - independent_count}"
-                    )
+        # Display collapsed sources
+        st.markdown(_wrap_sources_html(sources_html), unsafe_allow_html=True)
+
+    return subqueries, subquery_answers
+
+
+# ============================================================================
+# ENHANCED NAIVE RAG (One-shot optimized)
+# ============================================================================
+
+from ui.chat_history import _wrap_sources_html
+
+def respond_with_enhanced_naive_rag(
+    query: str,
+    build_rag_context,
+    retrieval_k: int,
+    top_rerank: int,
+    multi_retrieval_engine: "MultiRetrievalEngine",
+    session_key: str,
+    enable_history: bool = False,
+    answer_per_chunk: bool = False,
+    augment_chunk: bool = False,
+    rag_prompt_template: str = RAG_PROMPT_TEMPLATE,
+    **kwargs,
+):
+    """Optimized single-shot RAG with minimal overhead"""
+    
+    formatted_query = SubQuery(
+        id="main", 
+        question=query, 
+        query_type="single", 
+        priority=1, 
+        parent_query="None"
+    )
+    
+    # Fast retrieval
+    with st.spinner("🔍 Retrieving documents..."):
+        retrieval_result = multi_retrieval_engine._hybrid_retrieval(
+            subquery=formatted_query, 
+            retrieval_k=retrieval_k, 
+            top_rerank=top_rerank
+        )
+    
+    # Answer with streaming
+    with st.chat_message("assistant"):
+        pre_answer: SubQueryAnswer = (
+            multi_retrieval_engine.answer_subquery_traditional_rag(
+                subquery=formatted_query,
+                retrieval_result=retrieval_result,
+                build_rag_context=build_rag_context,
+                answer_per_chunk=answer_per_chunk,
+                augment_chunk=augment_chunk,
+                rag_prompt_template=rag_prompt_template,
+                **kwargs,
+            )
+        )
+
+        # Store user message first
+        st.session_state[session_key]["messages"].append(
+            {"role": "user", "content": query}
+        )
+        
+        # Synthesize final answer (with optional history)
+        final_answer = multi_retrieval_engine.synthesize_final_answer(
+            original_query=query,
+            subquery_answers=[pre_answer],
+            enable_history=enable_history,
+            conversation_history=st.session_state[session_key]["messages"],
+        )
+        
+        # Store assistant message
+        st.session_state[session_key]["messages"].append(
+            {"role": "assistant", "content": final_answer}
+        )
+
+    # Generate and store sources
+    sources_html = generate_sources_html(
+        retrieval_result.documents, 
+        retrieval_result.metadatas, 
+        link_style="dual"
+    )
+    st.session_state[session_key]["messages"][-1][SOURCES_HTML] = sources_html
+
+    # Display collapsed sources
+    show_sources = kwargs.get("show_sources", True)
+    if show_sources:
+        st.markdown(_wrap_sources_html(sources_html), unsafe_allow_html=True)
+
+    return retrieval_result.documents
+
+
+def show_retrieval_statistics(
+    enable_multi_retrieval: bool,
+    show_retrieval_details: bool,
+    subquery_answers: List,
+    subqueries: List,
+    reranked_docs: List,
+    detection_info: Dict,
+):
+    """Streamlined statistics display"""
+    if not (enable_multi_retrieval and show_retrieval_details):
+        return
+
+    with st.expander("📊 Retrieval Statistics", expanded=False):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if enable_multi_retrieval:
+                total = sum(len(a.sources_used) for a in subquery_answers)
+                st.metric("Documents Used", total)
+            else:
+                st.metric("Documents Used", len(reranked_docs))
+        
+        with col2:
+            if enable_multi_retrieval:
+                answered = sum(
+                    1 for a in subquery_answers 
+                    if a.answer and "cannot answer" not in a.answer.lower()
+                )
+                st.metric("Answered", f"{answered}/{len(subquery_answers)}")
+            else:
+                st.metric("Query Type", "Single")
+        
+        with col3:
+            complexity = detection_info.get("complexity_score", 0)
+            st.metric("Complexity", f"{complexity}/10")
+
+
+def agentic_query_processing(
+    query: str,
+    selected_provider: str,
+    chat_function,
+    build_rag_context,
+    llm_model: str,
+    session_key: str,
+    multi_retrieval_engine: 'MultiRetrievalEngine',
+    enable_multi_retrieval: bool = False,
+    show_retrieval_details: bool = False,
+    show_decomposition: bool = False,
+    max_subqueries: int = 5,
+    default_strategy: str = "hybrid",
+    rag_prompt_template: str = RAG_PROMPT_TEMPLATE,
+    retrieval_k: int = 10,
+    top_rerank: int = 2,
+    **kwargs,
+):
+    """Unified query processing with optimized routing"""
+    
+    reranked_docs = []
+    subqueries = []
+    detection_info = {}
+    subquery_answers = []
+    enable_history = kwargs.get("enable_history", False)
+
+    # Check for chat-only mode (@ prefix)
+    if query.startswith("@"):
+        reply_with_chat_history(
+            prompt=query.lstrip("@").strip(),
+            llm_model=llm_model,
+            chat_function=chat_function,
+            selected_provider=selected_provider,
+            use_streamlit=True,
+            session_key=session_key,
+        )
+        return
+
+    # Route to appropriate RAG method
+    if enable_multi_retrieval:
+        subqueries, subquery_answers = respond_with_multi_retrieval_rag(
+            query=query,
+            build_rag_context=build_rag_context,
+            rag_prompt_template=rag_prompt_template,
+            retrieval_k=retrieval_k,
+            top_rerank=top_rerank,
+            multi_retrieval_engine=multi_retrieval_engine,
+            session_key=session_key,
+            enable_history=enable_history,
+            default_strategy=default_strategy,
+            max_subqueries=max_subqueries,
+            show_retrieval_details=show_retrieval_details,
+            show_decomposition=show_decomposition,
+        )
+    else:
+        reranked_docs = respond_with_enhanced_naive_rag(
+            query=query,
+            build_rag_context=build_rag_context,
+            retrieval_k=retrieval_k,
+            top_rerank=top_rerank,
+            multi_retrieval_engine=multi_retrieval_engine,
+            session_key=session_key,
+            rag_prompt_template=rag_prompt_template,
+            **kwargs,
+        )
+
+    # Show statistics if requested
+    show_retrieval_statistics(
+        enable_multi_retrieval,
+        show_retrieval_details,
+        subquery_answers,
+        subqueries,
+        reranked_docs,
+        detection_info,
+    )

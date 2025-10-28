@@ -4,7 +4,7 @@ import shutil
 from unittest.mock import Mock, patch, MagicMock
 import chromadb
 
-TEST_SESSION_KEY = "rsqkit_chat"
+TEST_SESSION_KEY = "rag_chat"
 
 # Import the modules we're testing
 from core_utils.retrieval_utils import (
@@ -165,7 +165,8 @@ class TestMultiRetrievalEngine:
                     {"role": "system", "content": "You are a helpful assistant."}
                 ],
                 "retrieval_history": [],
-            }
+            },
+            "temperature": 0,
         }
 
         with (
@@ -250,6 +251,7 @@ class TestMultiRetrievalEngine:
                         {"role": "system", "content": "You are a helpful assistant."}
                     ],
                     "retrieval_history": [],
+                    "temperature": 0,
                 }
             }
 
@@ -317,7 +319,8 @@ class TestMultiRetrievalEngine:
                         {"role": "system", "content": "You are a helpful assistant."}
                     ],
                     "retrieval_history": [],
-                }
+                },
+                "temperature": 0,
             }
 
             with (
@@ -413,45 +416,30 @@ class TestMultiRetrievalEngine:
                 patch("streamlit.markdown"),
                 patch("streamlit.expander"),
                 patch("ui.custom_display.view_sources"),
+                patch(
+                    "core_utils.retrieval_utils.respond_with_enhanced_naive_rag"
+                ) as mock_enhanced_rag,
             ):
-
+                mock_enhanced_rag.return_value = ["doc1", "doc2", "doc3"]
                 # Test with multi-retrieval disabled
                 agentic_query_processing(
                     query=test_query,
                     selected_provider="openai",
-                    rerank_results=mock_rerank_results,
                     chat_function=mock_llm_for_decomposition,
-                    get_embedding=mock_embedding_function,
+                    # get_embedding=mock_embedding_function,
                     llm_model="gpt-3.5-turbo",
                     multi_retrieval_engine=multi_retrieval_engine,
-                    hybrid_searcher=hybrid_searcher,
+                    # hybrid_searcher=hybrid_searcher,
                     show_decomposition=False,
                     default_strategy="adaptive",
                     show_retrieval_details=False,
                     max_subqueries=3,
-                    view_sources=Mock(),
                     enable_multi_retrieval=False,  # Disabled!
                     build_rag_context=Mock(return_value="Mocked context"),
                     session_key=TEST_SESSION_KEY,
                 )
 
-            # Verify that processing still works with single retrieval
-            assert len(mock_session_state[TEST_SESSION_KEY]["messages"]) > 1
-
-            # Should have user message and assistant response
-            user_messages = [
-                msg
-                for msg in mock_session_state[TEST_SESSION_KEY]["messages"]
-                if msg["role"] == "user"
-            ]
-            assistant_messages = [
-                msg
-                for msg in mock_session_state[TEST_SESSION_KEY]["messages"]
-                if msg["role"] == "assistant"
-            ]
-
-            assert len(user_messages) >= 1
-            assert len(assistant_messages) >= 1
+                mock_enhanced_rag.assert_called_once()
 
 
 if __name__ == "__main__":

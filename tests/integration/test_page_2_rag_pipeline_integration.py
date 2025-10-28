@@ -2,7 +2,7 @@ import pytest
 import tempfile
 import shutil
 import os
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 import chromadb
 
 # Import the modules we're testing
@@ -14,7 +14,7 @@ from core_utils.retrieval_utils import (
 )
 from prompt_templates.prompt_builder import build_rag_context
 
-TEST_SESSION_KEY = "rsqkit_chat"
+TEST_SESSION_KEY = "rag_chat"
 
 
 class TestCoreRAGPipeline:
@@ -98,7 +98,8 @@ class TestCoreRAGPipeline:
                     {"role": "system", "content": "You are a helpful assistant."}
                 ],
                 "retrieval_history": [],
-            }
+            },
+            "temperature": 0,
         }
 
         with (
@@ -189,7 +190,7 @@ class TestCoreRAGPipeline:
 
             # Perform a search with proper arguments
             results = hybrid_searcher.hybrid_search(
-                query=query_text, query_embedding=query_embedding, k=2
+                query=query_text, query_embedding=query_embedding, retrieval_k=2
             )
 
             # Verify we got results
@@ -236,7 +237,7 @@ class TestCoreRAGPipeline:
             for alpha in [0.0, 0.5, 1.0]:  # Pure keyword, balanced, pure semantic
                 hybrid_searcher = HybridSearch(collection, alpha=alpha)
                 results = hybrid_searcher.hybrid_search(
-                    query=query_text, query_embedding=query_embedding, k=2
+                    query=query_text, query_embedding=query_embedding, retrieval_k=2
                 )
 
                 # Should return results regardless of alpha

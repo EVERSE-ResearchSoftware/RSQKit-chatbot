@@ -7,17 +7,15 @@ from settings import (
 
 from typing import Dict, Any
 from functools import lru_cache
+from llm_provider_tools import get_default_llm
+from provider_persistence import ProviderPersistence
 from core_utils.health_api import check_api_key, check_health_api, get_available_models
 from app_config import (
     get_selected_llm_key,
-    get_provider_key_page,
     get_page_icon_mapping,
-    pages_config,
     ICONS,
-    pages,
     display_navigation_links,
     ensure_session_state_key,
-    safe_get_session_state,
     init_page_session_state,
     init_global_session_state,
 )
@@ -66,50 +64,49 @@ def get_cached_models(provider: str):
     return get_available_models(provider=provider)
 
 
-# Batch configuration loading with defensive checks
-@st.cache_data
-def get_sidebar_config(page_key: str) -> Dict[str, Any]:
-    """Get all sidebar configuration at once to minimize cache calls"""
+def get_sidebar_config_with_persistence(page_key: str) -> Dict[str, Any]:
+    """Enhanced sidebar config with provider persistence"""
+
     # Ensure session state is initialized
     init_page_session_state(page_key)
 
-    provider_page_key = get_provider_key_page(page_key)
-    provider = safe_get_session_state(provider_page_key, "")
+    # Get provider with persistence
+    provider = ProviderPersistence.get_provider(page_key)
+
+    # If no provider found, set empty but don't persist empty values
+    if not provider:
+        provider = ""
 
     config = {
         "page_icons": get_page_icon_mapping(),
         "provider_options": get_provider_options(),
         "provider": provider,
-        "provider_page_key": provider_page_key,
+        "provider_page_key": f"provider_{page_key}",
         "needs_provider_selection": page_key != COLLECTIONS_SESSION,
         "needs_model_selection": page_key != COLLECTIONS_SESSION,
     }
 
-    # Only fetch expensive data if provider is selected
-    if provider:
+    # Only fetch expensive data if provider is selected AND not empty
+    if provider and provider.strip():
         try:
+            config["default_llm"] = get_default_llm(selected_provider=provider)
             config["provider_status"] = get_provider_status(provider)
             config["available_models"] = get_cached_models(provider)
         except Exception as e:
-            st.error(f"Error loading provider data: {e}")
+            st.error(f"Error loading provider data for '{provider}': {e}")
             config["provider_status"] = {"has_api_key": False, "is_healthy": False}
             config["available_models"] = {"llms": [], "vlms": []}
+    else:
+        # Set default empty values when no provider is selected
+        config["provider_status"] = {"has_api_key": False, "is_healthy": False}
+        config["available_models"] = {"llms": [], "vlms": []}
 
     return config
 
 
-def reset_chat(page_key: str):
-    """Reset chat messages for a given page"""
-    ensure_session_state_key(page_key, {"messages": []})
-    if page_key in st.session_state and isinstance(st.session_state[page_key], dict):
-        st.session_state[page_key]["messages"] = []
-    else:
-        st.session_state[page_key] = {"messages": []}
+def render_provider_selection_with_persistence(config: Dict[str, Any], page_key: str):
+    """Enhanced provider selection with persistence"""
 
-
-def render_provider_selection(config: Dict[str, Any]):
-    """Render provider selection using pre-loaded config"""
-    provider_page_key = config["provider_page_key"]
     current_provider = config["provider"]
 
     with st.expander(f"{ICONS['provider']} AI Provider", expanded=True):
@@ -117,10 +114,10 @@ def render_provider_selection(config: Dict[str, Any]):
 
         # Get current index safely
         current_index = 0
-        if current_provider and current_provider in provider_options:
+        if current_provider and (current_provider in provider_options):
             current_index = list(provider_options.keys()).index(current_provider)
-        elif len(provider_options) > 1:
-            current_index = 1
+        elif len(provider_options) > 0:
+            current_index = 0
 
         provider = st.radio(
             label="Provider",
@@ -128,14 +125,14 @@ def render_provider_selection(config: Dict[str, Any]):
             format_func=lambda x: provider_options[x],
             index=current_index,
             label_visibility="hidden",
-            key=f"provider_radio_{provider_page_key}",  # Explicit key
+            key=f"provider_radio_{page_key}",
         )
 
-        # Update session state if provider changed
+        # Update persistence if provider changed
         if provider != current_provider:
-            st.session_state[provider_page_key] = provider
+            ProviderPersistence.set_provider(page_key, provider)
             # Clear cache to force refresh
-            get_sidebar_config.clear()
+            get_sidebar_config_with_persistence(page_key=page_key)
             st.rerun()
 
         # Show status if available in config
@@ -147,6 +144,15 @@ def render_provider_selection(config: Dict[str, Any]):
 
             if not status["is_healthy"]:
                 st.write(f"API is down {ICONS['api_down']}")
+
+
+def reset_chat(page_key: str):
+    """Reset chat messages for a given page"""
+    ensure_session_state_key(page_key, {"messages": []})
+    if page_key in st.session_state and isinstance(st.session_state[page_key], dict):
+        st.session_state[page_key]["messages"] = []
+    else:
+        st.session_state[page_key] = {"messages": []}
 
 
 def render_model_selection(page_key: str, config: Dict[str, Any]):
@@ -166,19 +172,23 @@ def render_model_selection(page_key: str, config: Dict[str, Any]):
     llm_key = get_selected_llm_key(page_key=page_key, provider=provider)
 
     # Combine LLM and VLM models
-    llms_vlms_models = available_models.get("llms", []) + available_models.get(
-        "vlms", []
+    llms_vlms_models = (
+        available_models.get("llms", [])
+        + available_models.get("vlms", [])
+        + available_models.get("all-models", [])
     )
 
     if llms_vlms_models:
         # Ensure the LLM key exists in session state
+        _default_llm = config.get("default_llm", "")
+        index_default_llm = llms_vlms_models.index(_default_llm) if _default_llm else 0
         default_model = llms_vlms_models[-1] if llms_vlms_models else ""
-        ensure_session_state_key(llm_key, default_model)
+        ensure_session_state_key(llm_key, _default_llm)
 
         st.selectbox(
             label="LLMs",
             options=llms_vlms_models,
-            index=len(llms_vlms_models) - 1,
+            index=index_default_llm,
             label_visibility="hidden",
             key=llm_key,
         )
@@ -200,7 +210,8 @@ def sidebar(page_key: str):
         init_page_session_state(page_key)
 
         # Load all config at once
-        config = get_sidebar_config(page_key)
+        # config = get_sidebar_config(page_key)
+        config = get_sidebar_config_with_persistence(page_key)
 
         # Display navigation links
         render_navigation_links()
@@ -222,7 +233,8 @@ def sidebar(page_key: str):
 
             # Provider selection (conditional rendering)
             if config["needs_provider_selection"]:
-                render_provider_selection(config)
+                # render_provider_selection(config)
+                render_provider_selection_with_persistence(config, page_key=page_key)
 
             # Model selection (conditional rendering)
             if config["needs_model_selection"]:

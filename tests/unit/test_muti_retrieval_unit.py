@@ -4,9 +4,8 @@ Tests individual classes and methods in isolation using mocks.
 """
 
 import pytest
-from unittest.mock import Mock, MagicMock, patch
-import json
-from typing import List, Dict, Any
+from unittest.mock import Mock, patch
+
 
 # Import the classes we're testing
 from core_utils.retrieval_utils import (
@@ -216,7 +215,7 @@ class TestMultiRetrievalEngine:
         assert "reasoning" in result
         assert (
             result["reasoning"]
-            == "Heuristic detection based on punctuation and keywords"
+            == "Heuristic detection"
         )
 
     @patch("core_utils.retrieval_utils.st", create=True)
@@ -410,6 +409,8 @@ class TestMultiRetrievalEngine:
             retrieval_result,
             mock_build_context,
             "Query: {query}\nContext: {context}",
+            augment_chunk=False,  # chunk_augmentation,
+            answer_per_chunk=False,
         )
 
         # Verify successful response
@@ -432,6 +433,7 @@ class TestMultiRetrievalEngine:
         )
 
         # Test synthesis with single answer
+        # result = mock_engine.synthesize_final_answer("What is AI?", [answer])
         result = mock_engine.synthesize_final_answer("What is AI?", [answer])
 
         # Verify single answer is returned directly

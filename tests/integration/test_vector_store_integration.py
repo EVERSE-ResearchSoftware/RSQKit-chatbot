@@ -8,6 +8,7 @@ from chroma_data_ingestor import (
     node_pipeline,
     add_nodes_to_chroma,
 )
+from settings import RSQ_KIT_CHROMA_COLLECTION
 
 
 class MockNode:
@@ -83,7 +84,9 @@ class TestIngestData:
         mock_listdir.assert_called_once_with("/test/dir")
         assert mock_node_pipeline.call_count == 2
         mock_get_embedding.assert_called()
-        mock_client.get_or_create_collection.assert_called_once_with("rsqkit")
+        mock_client.get_or_create_collection.assert_called_once_with(
+            RSQ_KIT_CHROMA_COLLECTION
+        )
 
     @patch("os.path.exists")
     def test_ingest_data_directory_not_exists(self, mock_exists):

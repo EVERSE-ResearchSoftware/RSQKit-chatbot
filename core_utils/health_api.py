@@ -1,31 +1,3 @@
-# from settings import (
-#     RESOURCES,
-#     ConfigKeys,
-#     PROVIDER_TO_RESOURCE_KEY,
-#     PROVIDER_ID_TO_NAME,
-# )
-# import os
-# from dotenv import load_dotenv
-
-# OLLAMA_DISPLAY_NAME = PROVIDER_ID_TO_NAME.get("ollama", "Ollama")
-
-# load_dotenv()
-
-
-# # Function to check if api_key is present
-# def check_api_key(provider: str):
-#     # Ollama doesn't need an api_key but a dummy api_key is required by the OpenAI client
-#     is_ollama = provider == OLLAMA_DISPLAY_NAME
-#     if is_ollama:
-#         return True
-
-#     provider_id = PROVIDER_TO_RESOURCE_KEY.get(provider, "")
-#     provider_resource = RESOURCES.get(provider_id, {})
-#     is_api_key_present = (
-#         os.environ.get(provider_resource.get(ConfigKeys.API_ENV_VAR, "")) is not None
-#     )  # boolean
-#     return is_api_key_present
-
 from settings import (
     RESOURCES,
     ConfigKeys,
@@ -34,7 +6,8 @@ from settings import (
     ModelTypeKeys,
     ModelTypes,
 )
-from typing import Dict, List, TypedDict, Optional
+
+from pathlib import Path
 import logging
 
 from llms.openai_interface import _get_client
@@ -43,86 +16,165 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import json
+from datetime import datetime, timedelta
 
-# Function to check if api_key is present
+# Path to the JSON file that stores the last scan timestamps and cached data
+last_api_scan_providers = Path(__file__).parent / "last_api_scan_providers.json"
+
+
+# Helper: load JSON data (create file if it doesn't exist)
+def _load_last_scan_info():
+    if not last_api_scan_providers.exists():
+        last_api_scan_providers.write_text("{}")
+    try:
+        with last_api_scan_providers.open("r") as fp:
+            return json.load(fp) or {}
+    except json.JSONDecodeError:
+        return {}
+
+
+# Helper: save JSON data
+def _save_last_scan_info(data):
+    with last_api_scan_providers.open("w") as fp:
+        json.dump(data, fp, indent=2)
+
+
+# Cache in memory for quick access
+_last_scan_info = _load_last_scan_info()
+
+
+def _update_provider_entry(provider, *, health_status=None, models=None):
+    """
+    Update the JSON entry for *provider* with the current timestamp and
+    optionally the health status and available models.
+    """
+    global _last_scan_info
+    entry = _last_scan_info.get(provider, {})
+    entry.update(
+        {
+            "last_scan": datetime.now().isoformat(),
+        }
+    )
+    if health_status is not None:
+        entry["health_status"] = health_status
+    if models is not None:
+        entry["models"] = models
+    _last_scan_info[provider] = entry
+    _save_last_scan_info(_last_scan_info)
+
+
 def check_api_key(provider: str):
     provider_id = PROVIDER_TO_RESOURCE_KEY.get(provider, "")
     provider_resources = RESOURCES.get(provider_id, {})
     is_api_key_present = (
         os.environ.get(provider_resources.get(ConfigKeys.API_ENV_VAR, "")) is not None
-    )  # boolean
+    )
     return is_api_key_present
 
 
 def check_health_api(provider: str) -> str:
-    client = _get_client(provider=provider)
-    try:
-        available_models = [model.id for model in client.models.list()]
-        return StatusAPI.UP if len(available_models) > 0 else StatusAPI.DOWN
-    except Exception as e:
-        print("API health check failed:", e)
-        return StatusAPI.DOWN
+    """Return the health status of a provider with 2‑hour caching."""
+    provider_data = _last_scan_info.get(provider)
 
+    now = datetime.now()
+    last_scan = None
+    if provider_data:
+        try:
+            last_scan = datetime.fromisoformat(provider_data.get("last_scan", ""))
+        except Exception:
+            last_scan = None
 
-from typing import List, TypedDict
-import logging
+    if not provider_data or not last_scan or now - last_scan > timedelta(hours=2):
+        # Run the health check
+        client = _get_client(provider=provider)
+        try:
+            available_models = [model.id for model in client.models.list()]
+            status = StatusAPI.UP if len(available_models) > 0 else StatusAPI.DOWN
+        except Exception as e:
+            print("API health check failed:", e)
+            status = StatusAPI.DOWN
+
+        # Fetch models for caching (this will also update the JSON entry)
+        models = get_available_models(provider)
+
+        # Update JSON entry with status and models
+        _update_provider_entry(provider, health_status=status, models=models)
+    else:
+        # Return cached status
+        status = provider_data.get("health_status", StatusAPI.DOWN)
+
+    return status
 
 
 def get_available_models(provider: str) -> ModelTypes:
-    """
-    Fetches and categorizes available models by type from the given provider.
+    """Fetch (or cache‑return) available models by type with 2‑hour caching."""
+    provider_data = _last_scan_info.get(provider)
 
-    Args:
-        provider (str): The name of the provider to use for the API client.
+    now = datetime.now()
+    last_scan = None
+    if provider_data:
+        try:
+            last_scan = datetime.fromisoformat(provider_data.get("last_scan", ""))
+        except Exception:
+            last_scan = None
 
-    Returns:
-        ModelTypes: A dictionary with keys 'embeddings', 'llms', 'vlms', and 'rerankers',
-                   each mapping to a list of model IDs that match the respective type.
+    if not provider_data or not last_scan or now - last_scan > timedelta(hours=2):
+        logger = logging.getLogger(__name__)
+        if not provider or not isinstance(provider, str):
+            logger.error("Provider must be a non-empty string")
+            result = _get_empty_model_types()
+        else:
+            try:
+                client = _get_client(provider=provider)
+                models = client.models.list()
+                model_type_mapping = {
+                    ModelTypeKeys.EMBEDDINGS_API_TYPE: [],
+                    ModelTypeKeys.LLMS_API_TYPE: [],
+                    ModelTypeKeys.VLMS_API_TYPE: [],
+                    ModelTypeKeys.RERANKERS_API_TYPE: [],
+                    ModelTypeKeys.TRANSCRIPTION_API_TYPE: [],
+                    ModelTypeKeys.ALL_MODELS: [],
+                }
+                for model in models:
+                    if hasattr(model, "type"):
+                        if model.type in model_type_mapping:
+                            model_type_mapping[model.type].append(model.id)
+                        else:
+                            logger.warning(f"Unknown model type: {model.type}")
+                    else:
+                        logger.warning(
+                            f"Provider {provider} doesn't sort model by type"
+                        )
+                    model_type_mapping[ModelTypeKeys.ALL_MODELS].append(model.id)
 
-    Raises:
-        ValueError: If the provider is not valid or client creation fails.
-    """
-    logger = logging.getLogger(__name__)
+                result = {
+                    ModelTypeKeys.EMBEDDINGS: model_type_mapping[
+                        ModelTypeKeys.EMBEDDINGS_API_TYPE
+                    ],
+                    ModelTypeKeys.LLMS: model_type_mapping[ModelTypeKeys.LLMS_API_TYPE],
+                    ModelTypeKeys.VLMS: model_type_mapping[ModelTypeKeys.VLMS_API_TYPE],
+                    ModelTypeKeys.RERANKERS: model_type_mapping[
+                        ModelTypeKeys.RERANKERS_API_TYPE
+                    ],
+                    ModelTypeKeys.TRANSCRIPTION: model_type_mapping[
+                        ModelTypeKeys.TRANSCRIPTION_API_TYPE
+                    ],
+                    ModelTypeKeys.ALL_MODELS: model_type_mapping[
+                        ModelTypeKeys.ALL_MODELS
+                    ],
+                }
+            except Exception as e:
+                logger.error(f"Failed to fetch models for provider '{provider}': {e}")
+                result = _get_empty_model_types()
 
-    if not provider or not isinstance(provider, str):
-        logger.error("Provider must be a non-empty string")
-        return _get_empty_model_types()
+        # Cache the result (this also updates last_scan timestamp)
+        _update_provider_entry(provider, models=result)
+    else:
+        # Return cached model info
+        result = provider_data.get("models", _get_empty_model_types())
 
-    try:
-        client = _get_client(provider=provider)
-        models = client.models.list()
-
-        model_type_mapping = {
-            ModelTypeKeys.EMBEDDINGS_API_TYPE: [],
-            ModelTypeKeys.LLMS_API_TYPE: [],
-            ModelTypeKeys.VLMS_API_TYPE: [],
-            ModelTypeKeys.RERANKERS_API_TYPE: [],
-            ModelTypeKeys.TRANSCRIPTION_API_TYPE: [],
-        }
-
-        for model in models:
-            if model.type in model_type_mapping:
-                model_type_mapping[model.type].append(model.id)
-            else:
-                logger.warning(f"Unknown model type: {model.type}")
-
-        return {
-            ModelTypeKeys.EMBEDDINGS: model_type_mapping[
-                ModelTypeKeys.EMBEDDINGS_API_TYPE
-            ],
-            ModelTypeKeys.LLMS: model_type_mapping[ModelTypeKeys.LLMS_API_TYPE],
-            ModelTypeKeys.VLMS: model_type_mapping[ModelTypeKeys.VLMS_API_TYPE],
-            ModelTypeKeys.RERANKERS: model_type_mapping[
-                ModelTypeKeys.RERANKERS_API_TYPE
-            ],
-            ModelTypeKeys.TRANSCRIPTION: model_type_mapping[
-                ModelTypeKeys.TRANSCRIPTION_API_TYPE
-            ],
-        }
-
-    except Exception as e:
-        logger.error(f"Failed to fetch models for provider '{provider}': {e}")
-        return _get_empty_model_types()
+    return result
 
 
 def _get_empty_model_types() -> ModelTypes:
@@ -133,4 +185,5 @@ def _get_empty_model_types() -> ModelTypes:
         ModelTypeKeys.VLMS: [],
         ModelTypeKeys.RERANKERS: [],
         ModelTypeKeys.TRANSCRIPTION: [],
+        ModelTypeKeys.ALL_MODELS: [],
     }

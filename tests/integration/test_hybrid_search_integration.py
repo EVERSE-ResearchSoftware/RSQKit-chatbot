@@ -159,7 +159,9 @@ class TestHybridSearchIntegration:
     def test_bm25_search_component(self, hybrid_searcher):
         """Test the BM25 search component independently"""
         # Test BM25 search directly
-        bm25_ids, bm25_scores = hybrid_searcher.search_bm25("machine learning", k=3)
+        bm25_ids, bm25_scores = hybrid_searcher.search_bm25(
+            "machine learning", retrieval_k=3
+        )
 
         # Verify we got results
         assert isinstance(bm25_ids, list)
@@ -179,7 +181,7 @@ class TestHybridSearchIntegration:
 
         # Test semantic search directly
         semantic_ids, semantic_scores = hybrid_searcher.search_semantic(
-            query_embedding, k=3
+            query_embedding, retrieval_k=3
         )
 
         # Verify we got results
@@ -204,7 +206,7 @@ class TestHybridSearchIntegration:
         hybrid_searcher.alpha = 1.0
 
         results = hybrid_searcher.hybrid_search(
-            "machine learning algorithms", query_embedding, k=3
+            "machine learning algorithms", query_embedding, retrieval_k=3
         )
 
         # Verify results structure
@@ -234,7 +236,7 @@ class TestHybridSearchIntegration:
 
         # Query with specific keywords that should match
         results = hybrid_searcher.hybrid_search(
-            "machine learning", query_embedding, k=3
+            "machine learning", query_embedding, retrieval_k=3
         )
 
         # Verify results structure
@@ -277,19 +279,19 @@ class TestHybridSearchIntegration:
             # Test with semantic-heavy weighting (alpha = 0.9)
             searcher_semantic = HybridSearch(mock_collection, alpha=0.9)
             semantic_results = searcher_semantic.hybrid_search(
-                query, query_embedding, k=3
+                query, query_embedding, retrieval_k=3
             )
 
             # Test with keyword-heavy weighting (alpha = 0.1)
             searcher_keyword = HybridSearch(mock_collection, alpha=0.1)
             keyword_results = searcher_keyword.hybrid_search(
-                query, query_embedding, k=3
+                query, query_embedding, retrieval_k=3
             )
 
             # Test with balanced weighting (alpha = 0.5)
             searcher_balanced = HybridSearch(mock_collection, alpha=0.5)
             balanced_results = searcher_balanced.hybrid_search(
-                query, query_embedding, k=3
+                query, query_embedding, retrieval_k=3
             )
 
             # Verify all searches return results
@@ -316,7 +318,7 @@ class TestHybridSearchIntegration:
 
         # Test query that should match specific document
         results = hybrid_searcher.hybrid_search(
-            "natural language processing", query_embedding, k=5
+            "natural language processing", query_embedding, retrieval_k=5
         )
 
         # Verify result structure and content
@@ -346,7 +348,7 @@ class TestHybridSearchIntegration:
 
         # Test empty query
         try:
-            results = hybrid_searcher.hybrid_search("", query_embedding, k=3)
+            results = hybrid_searcher.hybrid_search("", query_embedding, retrieval_k=3)
             # Should either return empty results or handle gracefully
             assert isinstance(results, dict)
             assert "ids" in results
@@ -375,7 +377,9 @@ class TestHybridSearchIntegration:
         query_embedding = np.random.rand(384).tolist()
 
         # Request more results than available documents (we have 5 test docs)
-        results = hybrid_searcher.hybrid_search("algorithms", query_embedding, k=10)
+        results = hybrid_searcher.hybrid_search(
+            "algorithms", query_embedding, retrieval_k=10
+        )
 
         # Should return all available documents (max 5)
         assert len(results["ids"]) <= 5
@@ -388,7 +392,9 @@ class TestHybridSearchIntegration:
 
         # Test with normal query - should work
         try:
-            results = hybrid_searcher.hybrid_search("test query", query_embedding, k=3)
+            results = hybrid_searcher.hybrid_search(
+                "test query", query_embedding, retrieval_k=3
+            )
             assert isinstance(results, dict)
             assert "ids" in results
         except Exception as e:
@@ -405,8 +411,8 @@ class TestHybridSearchIntegration:
         query = "machine learning"
 
         # Run same search multiple times
-        results1 = hybrid_searcher.hybrid_search(query, query_embedding, k=3)
-        results2 = hybrid_searcher.hybrid_search(query, query_embedding, k=3)
+        results1 = hybrid_searcher.hybrid_search(query, query_embedding, retrieval_k=3)
+        results2 = hybrid_searcher.hybrid_search(query, query_embedding, retrieval_k=3)
 
         # Results should be consistent
         assert results1["ids"] == results2["ids"]
@@ -442,7 +448,7 @@ class TestHybridSearchIntegration:
 
             # Verify searcher can work with collection data
             query_embedding = np.random.rand(384).tolist()
-            results = searcher.hybrid_search("test", query_embedding, k=2)
+            results = searcher.hybrid_search("test", query_embedding, retrieval_k=2)
             assert len(results["ids"]) <= 2
 
     def test_hybrid_search_alpha_boundary_values(self, mock_collection):
@@ -467,13 +473,13 @@ class TestHybridSearchIntegration:
             # Test alpha = 0.0 (pure keyword search)
             searcher_keyword = HybridSearch(mock_collection, alpha=0.0)
             keyword_results = searcher_keyword.hybrid_search(
-                query, query_embedding, k=3
+                query, query_embedding, retrieval_k=3
             )
 
             # Test alpha = 1.0 (pure semantic search)
             searcher_semantic = HybridSearch(mock_collection, alpha=1.0)
             semantic_results = searcher_semantic.hybrid_search(
-                query, query_embedding, k=3
+                query, query_embedding, retrieval_k=3
             )
 
             # Both should return valid results
@@ -501,7 +507,7 @@ class TestHybridSearchIntegration:
         # Test with balanced alpha
         hybrid_searcher.alpha = 0.5
         results = hybrid_searcher.hybrid_search(
-            "machine learning data", query_embedding, k=3
+            "machine learning data", query_embedding, retrieval_k=3
         )
 
         # Verify scores are reasonable
@@ -517,7 +523,9 @@ class TestHybridSearchIntegration:
         """Test that hybrid search preserves document metadata correctly"""
         query_embedding = np.random.rand(384).tolist()
 
-        results = hybrid_searcher.hybrid_search("computer vision", query_embedding, k=5)
+        results = hybrid_searcher.hybrid_search(
+            "computer vision", query_embedding, retrieval_k=5
+        )
 
         # Verify metadata structure
         metadatas = results["metadatas"]
