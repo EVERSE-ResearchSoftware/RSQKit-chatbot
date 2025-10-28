@@ -2,229 +2,142 @@ import streamlit as st
 from itertools import zip_longest
 from pathlib import Path
 import base64
+import html
+import os
 import shutil
 
 
-def create_browser_viewable_link(file_path, display_text, size_limit_bytes=2_000_000):
+def copy_to_static_folder(file_path):
     """
-    Affiche le fichier dans un iframe si petit, sinon copie dans static/documents/ et l'affiche par URL.
-    Compatible avec PDF, images, HTML, etc.
-
-    Args:
-        file_path (str): Chemin vers le fichier local (ex: 'documents/monfichier.pdf')
-        display_text (str): Texte du lien ou titre du fichier
-        size_limit_bytes (int): Taille max pour base64 embedding (défaut: 2 Mo)
-
-    Returns:
-        str: HTML contenant l'iframe ou un lien de téléchargement
+    Copy file to static/documents folder and return the HTTP URL
+    This allows files to be opened in new tabs without browser blocking
     """
-    path = Path(file_path)
-    if not path.exists():
-        return f'<span style="color: red;">{display_text} (fichier introuvable)</span>'
-
-    file_extension = path.suffix.lower()
-    browser_viewable = {
-        ".pdf": "application/pdf",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".gif": "image/gif",
-        ".bmp": "image/bmp",
-        ".webp": "image/webp",
-        ".svg": "image/svg+xml",
-        ".txt": "text/plain",
-        ".html": "text/html",
-        ".htm": "text/html",
-    }
-
     try:
-        with open(file_path, "rb") as file:
-            file_bytes = file.read()
+        source_path = Path(file_path)
+        if not source_path.exists():
+            return None
 
-        # ✅ CASE 1: Embed as base64 if small enough and viewable
-        if file_extension in browser_viewable and len(file_bytes) <= size_limit_bytes:
-            mime_type = browser_viewable[file_extension]
-            b64 = base64.b64encode(file_bytes).decode()
-            return f"""
-            <div style="margin-top: 1em;">
-                <div style="font-weight: bold; margin-bottom: 0.5em;">🔍 {display_text}</div>
-                <iframe src="data:{mime_type};base64,{b64}" 
-                        width="100%" height="600px" 
-                        style="border: 1px solid #ccc; border-radius: 8px;">
-                </iframe>
-            </div>
-            """
+        # Create static folder if it doesn't exist
+        static_dir = Path("static/documents")
+        static_dir.mkdir(parents=True, exist_ok=True)
 
-        # ✅ CASE 2: File too big → copy to static/documents and use URL
-        static_target = Path("static/documents") / path.name
-        static_target.parent.mkdir(parents=True, exist_ok=True)
-        if not static_target.exists():
-            shutil.copy(file_path, static_target)
+        # Copy file to static folder (only if not already there)
+        target_path = static_dir / source_path.name
+        if not target_path.exists():
+            shutil.copy2(file_path, target_path)
 
-        file_url = f"/static/documents/{path.name}"
-        return f"""
-        <div style="margin-top: 1em;">
-            <div style="font-weight: bold; margin-bottom: 0.5em;">🔍 {display_text}</div>
-            <iframe src="{file_url}" 
-                    width="100%" height="600px" 
-                    style="border: 1px solid #ccc; border-radius: 8px;">
-            </iframe>
-        </div>
-        """
-
+        # Return the HTTP URL (Streamlit serves /app/static/ by default)
+        return f"/app/static/documents/{source_path.name}"
     except Exception as e:
-        return f'<span style="color: red;">{display_text} (erreur: {str(e)})</span>'
+        print(f"Error copying to static folder: {e}")
+        return None
 
 
-def create_dual_link(file_path, display_text, page_start):
-    """
-    Crée deux liens : un pour ouvrir en ligne et un pour télécharger
-    """
-    http_file = f"http://localhost:8501/app/static/documents/{Path(file_path).name}#page={page_start}"
-    if not file_path or not Path(file_path).exists():
-        return f'<span style="color: red;">{display_text} (fichier introuvable)</span>'
-
+def encode_file_to_base64(file_path):
+    """Encode file to base64 once and cache it (for download button only)"""
     try:
-        with open(file_path, "rb") as file:
-            file_bytes = file.read()
-
-        file_extension = Path(file_path).suffix.lower()
-        filename = Path(file_path).name
-        b64 = base64.b64encode(file_bytes).decode()
-
-        # Types visualisables dans le navigateur
-        browser_viewable = {
-            ".pdf",
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".gif",
-            ".txt",
-            ".html",
-            ".svg",
-        }
-
-        if file_extension in browser_viewable:
-            mime_types = {
-                ".pdf": "application/pdf",
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-                ".png": "image/png",
-                ".gif": "image/gif",
-                ".txt": "text/plain",
-                ".html": "text/html",
-                ".svg": "image/svg+xml",
-            }
-            mime_type = mime_types.get(file_extension, "application/octet-stream")
-
-            return f"""
-            <div style="display: flex; gap: 10px; align-items: center;">
-                <a href="{http_file}" 
-                   target="_blank" 
-                   style="text-decoration: none; color: #1f77b4;">
-                   🔗 Ouvrir {display_text}
-                </a>
-                <span style="color: #ccc;">|</span>
-                <a href="data:application/octet-stream;base64,{b64}" 
-                   download="{filename}" 
-                   style="text-decoration: none; color: #28a745;">
-                   📄 Télécharger
-                </a>
-            </div>
-            """
-        else:
-            # Seulement téléchargement pour les autres types
-            return f"""<a href="data:application/octet-stream;base64,{b64}" 
-                       download="{filename}" 
-                       style="text-decoration: none; color: #ff6b6b;">
-                       📄 {display_text} (télécharger uniquement)
-                   </a>"""
-
+        with open(file_path, "rb") as f:
+            file_data = f.read()
+        return base64.b64encode(file_data).decode()
     except Exception as e:
-        return f'<span style="color: red;">{display_text} (erreur)</span>'
+        return None
+
+
+def create_dual_link_html(b64_data, filename, page_number, file_ext, http_url=None):
+    """
+    Creates HTML for view/download links
+    Uses HTTP URL for viewing (opens in new tab) and base64 for download
+    """
+    if not b64_data:
+        return '<span style="color: red;">Erreur de lecture du fichier</span>'
+
+    # Web viewer link (only for PDFs) - uses HTTP URL to avoid browser blocking
+    if file_ext.lower() == ".pdf" and http_url:
+        viewer_url = f"{http_url}#page={page_number}"
+        viewer_link = f"""<a href="{viewer_url}" target="_blank" style="display: inline-block; padding: 8px 16px; background-color: #2196F3; color: white; text-decoration: none; border-radius: 4px; margin: 5px;">🔎 View (page {page_number})</a>"""
+    else:
+        viewer_link = ""
+
+    # Download link (uses base64 to force download)
+    download_link = f"""<a href="data:application/octet-stream;base64,{b64_data}" download="{filename}" style="display: inline-block; padding: 8px 16px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; margin: 5px;">📥 Download</a>"""
+
+    return viewer_link + download_link
+
+
+def generate_sources_html(relevant_docs, metadatas, link_style="dual"):
+    """
+    Pre-computes source HTML with embedded base64 files
+    Returns HTML string for immediate display
+    """
+    html_parts = []
+
+    for idx, (doc, meta) in enumerate(
+        zip_longest(relevant_docs, metadatas, fillvalue={}), start=1
+    ):
+        # Source title
+        html_parts.append(
+            f'<div class="source-title" style="font-weight: bold; margin: 15px 0 10px 0; font-size: 1.1em;">📄 Source #{idx}</div>'
+        )
+
+        # Document content (truncate and escape)
+        doc_preview = doc[:100] + "..." if len(doc) > 100 else doc
+        escaped_doc = html.escape(doc_preview).replace("\n", "<br>")
+        html_parts.append(
+            f'<div style="padding: 10px; background-color: #f0f2f6; border-radius: 5px; margin: 10px 0;">{escaped_doc}</div>'
+        )
+
+        if meta:
+            file_path = meta.get("file-path")
+            page_start = int(meta.get("page-start", 1))
+            title = meta.get("title", "Document")
+            page_end = meta.get("page-end", "last_page")  # Addition of page_end
+
+            # Display file title
+            escaped_title = html.escape(title)
+            html_parts.append(
+                f'<div style="margin: 10px 0;">File: {escaped_title}</div>'
+            )
+            html_parts.append(
+                f'<div style="margin: 0 0 10px 0;">Pages: {page_start} to {page_end}</div>'
+            )
+            # Generate file links
+            if file_path and Path(file_path).exists():
+                # Copy file to static folder for HTTP serving
+                http_url = copy_to_static_folder(file_path)
+
+                # Encode file for download button
+                b64_data = encode_file_to_base64(file_path)
+                file_ext = Path(file_path).suffix
+                filename = Path(file_path).name
+
+                if b64_data:
+                    file_links = create_dual_link_html(
+                        b64_data, filename, page_start, file_ext, http_url
+                    )
+                    html_parts.append(
+                        f'<div style="margin: 10px 0;">{file_links}</div>'
+                    )
+                else:
+                    html_parts.append(
+                        '<span style="color: red;">Erreur lors de la lecture du fichier</span>'
+                    )
+            else:
+                html_parts.append(
+                    '<span style="color: gray;">Aucun fichier associé</span>'
+                )
+
+        # Divider
+        html_parts.append(
+            '<hr style="margin: 20px 0; border: none; border-top: 1px solid #ddd;">'
+        )
+
+    return "\n".join(html_parts)
 
 
 def view_sources(relevant_docs, metadatas, link_style="dual"):
     """
-    Affiche les sources avec différents styles de liens
-
-    Args:
-        relevant_docs: Liste des documents (textes, extraits, etc.)
-        metadatas: Liste des métadonnées associées
-        link_style (str): "view", "download", ou "dual"
+    Legacy function for backward compatibility
+    Displays sources directly (not used for chat history)
     """
-    for idx, (doc, meta) in enumerate(
-        zip_longest(relevant_docs, metadatas, fillvalue={}), start=1
-    ):
-        # Titre et contenu principal
-        st.markdown(
-            f'<div class="source-title">Source #{idx}</div>', unsafe_allow_html=True
-        )
-        st.success(doc)
-
-        if meta:
-            selected_keys = ["title"]
-            file_path = meta.get("file-path")
-            page_start = int(meta.get("page-start"))
-
-            for key in selected_keys:
-                value = meta.get(key)
-                displayed_key = "Fichier" if key == "title" else key
-
-                # Affiche le label (titre)
-                st.markdown(
-                    f'<div class="source-title">{displayed_key}: {value}</div>',
-                    unsafe_allow_html=True,
-                )
-
-                # Affiche le lien selon le style choisi
-                if file_path:
-                    if link_style == "view":
-                        file_link = create_browser_viewable_link(file_path, value)
-                    elif link_style == "dual":
-                        file_link = create_dual_link(file_path, value, page_start)
-                    else:  # "download"
-                        file_link = create_downloadable_link(file_path, value)
-
-                    st.markdown(file_link, unsafe_allow_html=True)
-                else:
-                    st.markdown(
-                        '<span style="color: gray;">Aucun fichier associé</span>',
-                        unsafe_allow_html=True,
-                    )
-
-        st.markdown('<hr class="source-divider">', unsafe_allow_html=True)
-
-
-def create_downloadable_link(file_path, display_text):
-    """Fonction de téléchargement simple (de l'exemple précédent)"""
-    if not file_path or not Path(file_path).exists():
-        return f'<span style="color: red;">{display_text} (fichier introuvable)</span>'
-
-    try:
-        with open(file_path, "rb") as file:
-            file_bytes = file.read()
-
-        b64 = base64.b64encode(file_bytes).decode()
-        filename = Path(file_path).name
-
-        return f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}" style="color: #1f77b4;">📄 {display_text}</a>'
-
-    except Exception as e:
-        return f'<span style="color: red;">{display_text} (erreur)</span>'
-
-
-# Exemple d'utilisation
-if __name__ == "__main__":
-    # Données de test
-    relevant_docs = ["Contenu du document 1", "Contenu du document 2"]
-    metadatas = [
-        {"title": "Document1.pdf", "file-path": "/path/to/doc1.pdf"},
-        {"title": "Image.jpg", "file-path": "/path/to/image.jpg"},
-    ]
-
-    st.header("Style: Ouverture en onglet (quand possible)")
-    view_sources(relevant_docs, metadatas, link_style="view")
-
-    st.header("Style: Double lien (ouvrir + télécharger)")
-    view_sources(relevant_docs, metadatas, link_style="dual")
+    sources_html = generate_sources_html(relevant_docs, metadatas, link_style)
+    st.markdown(sources_html, unsafe_allow_html=True)

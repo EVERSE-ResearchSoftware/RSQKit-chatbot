@@ -69,6 +69,21 @@ def _create_client(provider: str) -> OpenAI:
     return OpenAI(base_url=config[ConfigKeys.BASE_URL], api_key=api_key)
 
 
+def _create_embedding_client(provider: str) -> OpenAI:
+    """Create OpenAI client for embeddings"""
+    config = _get_provider_config(provider)
+    resource_key = _get_resource_key(provider)
+
+    api_key = os.environ.get(
+        config[ConfigKeys.API_ENV_VAR], "required-but-needed-for-ollama"
+    )
+
+    if not api_key and resource_key != "ollama":
+        raise LLMClientError(f"API_KEY environment variable required for {provider}")
+
+    return OpenAI(base_url=config[ConfigKeys.BASE_URL_EMBEDDING], api_key=api_key)
+
+
 def get_embedding(
     input: Union[str, List[str]], provider: str, model_name: Optional[str] = None
 ) -> Union[List[float], List[List[float]]]:
@@ -110,7 +125,7 @@ def get_embedding(
         is_string = isinstance(input, str)
         if is_string:
             input = [input]
-        client = _create_client(provider)
+        client = _create_embedding_client(provider)
 
         # Generate embeddings
         response = client.embeddings.create(
@@ -240,8 +255,3 @@ def get_default_vison_model(selected_provider: str) -> str:
         )
 
     return vision_model
-
-
-def _get_ai_resources(provider):
-    provider_resource_key = _get_resource_key(provider=provider)
-    return RESOURCES.get(provider_resource_key)

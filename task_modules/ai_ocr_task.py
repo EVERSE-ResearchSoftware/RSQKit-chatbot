@@ -1,15 +1,15 @@
 import streamlit as st
 from streamlit import file_uploader, session_state, chat_message
 from PIL import Image
-from llm_provider_tools import resolve_vision_function, _get_ai_resources
+from llm_provider_tools import resolve_vision_function, _get_provider_config
 from task_modules.base_task import BaseTask
 import os
 
 
 class AIOCRTask(BaseTask):
-    def __init__(self, task_name, config, provider):
-        super().__init__(task_name, config, provider)
-        self.provider_resources = _get_ai_resources(provider=provider)
+    def __init__(self, task_name, task_config, provider):
+        super().__init__(task_name, task_config, provider)
+        self.provider_config = _get_provider_config(provider=provider)
 
     def render_ui(self):
         uploaded_file = file_uploader(
@@ -34,8 +34,8 @@ class AIOCRTask(BaseTask):
             response = vision_function(
                 image=uploaded_file,
                 question=prompt,
-                model_name=self.provider_resources.get("default_vision"),
-                base_url=self.provider_resources.get("base_url_vision"),
-                api_key=os.environ.get(self.provider_resources["api_env_var_vision"]),
+                model_name=self.provider_config.get("default_vision"),
+                base_url=self.provider_config.get("base_url_vision"),
+                api_key=os.environ.get(self.provider_config["api_env_var_vision"]),
             )
             st.markdown(response)

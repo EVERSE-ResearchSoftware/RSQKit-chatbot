@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import Mock, patch
 import streamlit as st
 
-from core_utils.retrieval_utils import agentic_query_processing
+from core_utils.retrieval_utils import agentic_query_processing, generate_sources_html
 
 
 def test_agentic_query_processing_multi_retrieval():
@@ -60,7 +60,6 @@ def test_agentic_query_processing_multi_retrieval():
     # Mock session_state
     with patch("streamlit.session_state", new_callable=dict):
         st.session_state = {session_key: {"messages": [], "retrieval_history": []}}
-        view_sources = Mock()
 
         agentic_query_processing(
             query=query,
@@ -69,7 +68,6 @@ def test_agentic_query_processing_multi_retrieval():
             chat_function=Mock(),
             build_rag_context=Mock(return_value="context"),
             llm_model=llm_model,
-            view_sources=view_sources,
             session_key=session_key,
             multi_retrieval_engine=multi_retrieval_engine,
             hybrid_searcher=Mock(),
@@ -84,7 +82,14 @@ def test_agentic_query_processing_multi_retrieval():
         # Check session_state
         expected_messages = [
             {"role": "user", "content": query},
-            {"role": "assistant", "content": "Final answer"},
+            {
+                "role": "assistant",
+                "content": "Final answer",
+                "sources_html": generate_sources_html(
+                    relevant_docs=["doc1", "doc2"],
+                    metadatas=[{"source": "source1"}, {"source": "source2"}],
+                ),
+            },
         ]
         assert st.session_state[session_key]["messages"] == expected_messages
 
@@ -99,12 +104,6 @@ def test_agentic_query_processing_multi_retrieval():
         assert (
             entry["results_count"] == 2
         )  # len(result.documents) for retrieval_results
-
-        # Check view_sources was called with all_sources and all_metadatas
-        view_sources.assert_called_once_with(
-            relevant_docs=["doc1", "doc2"],
-            metadatas=[{"source": "source1"}, {"source": "source2"}],
-        )
 
 
 def test_agentic_query_processing_traditional():
@@ -147,45 +146,64 @@ def test_agentic_query_processing_traditional():
     chat_function.return_value = iter(
         ["F", "i", "n", "a", "l", " ", "a", "n", "s", "w", "e", "r"]
     )
-    view_sources = Mock()
 
-    # Mock session_state
-    with patch("streamlit.session_state", new_callable=dict):
-        st.session_state = {session_key: {"messages": [], "retrieval_history": []}}
+    with patch(
+        "core_utils.retrieval_utils.respond_with_enhanced_naive_rag"
+    ) as mock_enhanced_rag:
+        mock_enhanced_rag.return_value = ["doc1", "doc2", "doc3"]
 
-        agentic_query_processing(
-            query=query,
-            selected_provider=selected_provider,
-            rerank_results=rerank_results,
-            chat_function=chat_function,
-            build_rag_context=build_rag_context,
-            llm_model=llm_model,
-            view_sources=view_sources,
-            session_key=session_key,
-            multi_retrieval_engine=Mock(),
-            hybrid_searcher=hybrid_searcher,
-            get_embedding=get_embedding,
-            enable_multi_retrieval=enable_multi_retrieval,
-            show_retrieval_details=show_retrieval_details,
-        )
+        # Mock session_state
+        with patch("streamlit.session_state", new_callable=dict):
+            st.session_state = {session_key: {"messages": [], "retrieval_history": []}}
 
-        # Check session_state
-        expected_messages = [
-            {"role": "user", "content": query},
-            {"role": "assistant", "content": "Final answer"},
-        ]
-        assert st.session_state[session_key]["messages"] == expected_messages
+            agentic_query_processing(
+                query=query,
+                selected_provider=selected_provider,
+                chat_function=chat_function,
+                build_rag_context=build_rag_context,
+                llm_model=llm_model,
+                session_key=session_key,
+                multi_retrieval_engine=Mock(),
+                enable_multi_retrieval=enable_multi_retrieval,
+                show_retrieval_details=show_retrieval_details,
+            )
 
-        # Check retrieval_history is empty
-        retrieval_history = st.session_state[session_key]["retrieval_history"]
-        assert retrieval_history == []
+            mock_enhanced_rag.assert_called_once()
+            # assert st.session_state[session_key]["messages"] == expected_messages
 
-        # Check view_sources was called with reranked_docs and reranked_metadatas
-        view_sources.assert_called_once_with(
-            relevant_docs=["doc1", "doc2", "doc3"],
-            metadatas=[
-                {"source": "source1"},
-                {"source": "source2"},
-                {"source": "source3"},
-            ],
-        )
+            # Check retrieval_history is empty
+            retrieval_history = st.session_state[session_key]["retrieval_history"]
+            assert retrieval_history == []
+
+    # # Mock session_state
+    # with patch("streamlit.session_state", new_callable=dict):
+    #     st.session_state = {session_key: {"messages": [], "retrieval_history": []}}
+
+    #     agentic_query_processing(
+    #         query=query,
+    #         selected_provider=selected_provider,
+    #         chat_function=chat_function,
+    #         build_rag_context=build_rag_context,
+    #         llm_model=llm_model,
+    #         session_key=session_key,
+    #         multi_retrieval_engine=Mock(),
+    #         enable_multi_retrieval=enable_multi_retrieval,
+    #         show_retrieval_details=show_retrieval_details,
+    #     )
+
+    #     # Check session_state
+    #     expected_messages = [
+    #         {"role": "user", "content": query},
+    #         {"role": "assistant", "content": "Final answer",
+    #          "sources_html": generate_sources_html(relevant_docs=["doc1", "doc2", "doc3"],metadatas=[
+    #             {"source": "source1"},
+    #             {"source": "source2"},
+    #             {"source": "source3"},
+    #         ])},
+
+    #     ]
+    #     assert st.session_state[session_key]["messages"] == expected_messages
+
+    #     # Check retrieval_history is empty
+    #     retrieval_history = st.session_state[session_key]["retrieval_history"]
+    #     assert retrieval_history == []

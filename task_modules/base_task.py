@@ -5,16 +5,16 @@ class BaseTask(ABC):
     def __init__(
         self,
         task_name,
-        config,
+        task_config,
         provider,
         # , model, function, provider_resources
     ):
         self.task_name = task_name
-        self.config = config
+        self.config = task_config
         self.provider = provider
         # self.model = model
         # self.function = function
-        # self.provider_resources = provider_resources
+        # self.provider_config = provider_resources
 
     @abstractmethod
     def render_ui(self):

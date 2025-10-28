@@ -8,14 +8,14 @@ from chroma_data_ingestor import (
     create_batch_embeddings,
     add_nodes_to_chroma,
 )
-from ui.header import sidebar, ICONS
-from settings import CHROMA_PERSIST_DIR, COLLECTIONS_SESSION, DOCUMENTS_DIR
+from ui.header import sidebar
+from app_config import ICONS
+from settings import CHROMA_PERSIST_DIR, DOCUMENTS_DIR, ChunkingKeys
 from collections import defaultdict
 from ui.custom_styles import CSS_CONTENT, inject_page_styles
-
+from ui.ui_rag_settings import display_chunking_settings, get_chunking_settings
 
 load_dotenv()
-
 
 # Initialize persistent ChromaDB client
 client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
@@ -23,19 +23,22 @@ client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
 # Path to your text documents
 docs_path = DOCUMENTS_DIR
 
-
-st.set_page_config(
-    page_title="Collections Management",
-    page_icon=ICONS["collections"],
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
 # CSS for styling
 st.markdown(CSS_CONTENT, unsafe_allow_html=True)
 
-sidebar(page_key=COLLECTIONS_SESSION)
-selected_provider = st.session_state[f"provider_{COLLECTIONS_SESSION}"]
+current_page_key = "collections"
+
+sidebar(page_key=current_page_key)
+selected_provider = st.session_state[f"provider_{current_page_key}"]
+
+display_chunking_settings()
+settings_for_rag = get_chunking_settings()
+
+# get chunk_size and chunk_overlap here and pass them as argumen in add files
+chunking_params = {
+    "chunk_size": st.session_state.get("chunk_size", 1000),
+    "chunk_overlap": st.session_state.get("chunk_overlap", 0),
+}
 
 inject_page_styles()
 st.markdown(
@@ -83,9 +86,7 @@ def add_files(
                 file_path = save_uploaded_file(uploaded_file)
                 file_paths.append(file_path)
 
-                chunks = node_pipeline(
-                    file_path=file_path, chunk_overlap=120, chunk_size=1000
-                )
+                chunks = node_pipeline(file_path=file_path, **chunking_params)
                 if chunks:
                     all_chunks.extend(chunks)
                 else:
